@@ -262,6 +262,11 @@ impl Coordinator {
         // 打点同源。旧的 `feed_auto_phrase` 只取 `InsertText`/`InsertTextWithCursor` 两种
         // ——那是「只关心新起的一段输入」的判据，随连续单字模型一起退役了。
         self.note_draft_commit(action);
+        // 输入历史：另一个消费者，**判据与上面两处都不同源**（见 `input_history` 模块文档）：
+        // 计入 `InsertText`/`InsertTextWithCursor`/`Commit*` 系的 commit_text（五笔满码自动
+        // 上屏走 `CommitThenDeferComposition`，漏了它用户丢失的长消息会**残缺**），
+        // 排除 `ReplaceBackward`（回改已上屏内容，不是新输入）与组合态（尚未落屏）。
+        self.note_input_history_commit(action);
     }
 
     /// 造词是否启用（码表/混输方案 + 开关开启）。拼音方案走 `[pinyin.auto_learn]` 的
@@ -280,6 +285,11 @@ impl Coordinator {
     /// `reason` 只进 DEBUG 日志，便于排查「这一段为什么被切断」。
     pub(crate) fn terminate_auto_phrase(&self, reason: &str) {
         self.terminate_draft_window(reason);
+        // 输入历史挂在同一个终止入口上：它的会话边界与滑窗草稿流**恰好同源**
+        // （回车/焦点丢失/IME 停用/模式切换/切换方案/光标移动），复用这一处收口即可，
+        // 不新开散点。注意它在 `terminate_draft_window` 的 `draft_enabled()` 闸门**之外**
+        // ——两者开关独立（草稿复用码表造词开关、输入历史有自己的 `input.history.enabled`）。
+        self.terminate_input_history(reason);
     }
 
     /// idle 超时（连续单字最大间隔）。0 = 用默认 5s。

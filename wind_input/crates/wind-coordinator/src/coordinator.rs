@@ -1382,6 +1382,22 @@ pub struct Coordinator {
     /// 是否已有草稿 flush 线程在跑。没有这道闸，队列每满一次就会 spawn 一个新线程去
     /// 抢同一把 redb 写锁（同 `is_building_reverse_index` 那道闸的理由）。
     pub(crate) draft_flushing: std::sync::atomic::AtomicBool,
+    /// 输入历史的**当前会话**累积缓冲（纯内存，无 IO）。
+    ///
+    /// 与 `draft_window` 的分界：那边缓冲「最近落屏的文本流」供滑窗切词，这边缓冲
+    /// 「一段连续输入」供整段取回。两者吃的都是通用上屏收口上的文字，但**判据刻意不同源**
+    /// ——`ReplaceBackward` 在那边是 `rewind`（它改变了文本流），在这边是排除（回改不是
+    /// 新输入）。见 `input_history` 模块文档。
+    pub(crate) input_history_buf: Mutex<crate::input_history::InputHistoryBuf>,
+    /// 已封口、待落库的输入会话队列。
+    ///
+    /// ★ **按键路径上只做累积与 push**，写库与裁剪全在后台线程
+    /// （`spawn_input_history_flush`）。裁剪是**全表规模**操作，绝不能进按键链路
+    /// （`wind-store/AGENTS.md`：redb 读缓存只涨不落）。
+    pub(crate) input_history_queue: Mutex<Vec<crate::input_history::ClosedSession>>,
+    /// 是否已有输入历史 flush 线程在跑。同 `draft_flushing` 的理由：没有这道闸，
+    /// 每次上屏都会 spawn 一个新线程去抢同一把 redb 写锁。
+    pub(crate) input_history_flushing: std::sync::atomic::AtomicBool,
     /// 最近一次**本输入法自己**向宿主吐字的时刻（由 `commit_action` 统一打点）。
     ///
     /// 用途只有一个：宿主插入我们提交的文字后会回送 `SelectionChanged`，它和「用户真的
@@ -2782,6 +2798,9 @@ impl Coordinator {
             draft_window: Mutex::new(crate::draft_window::DraftWindowBuf::new()),
             draft_queue: Mutex::new(Vec::new()),
             draft_flushing: std::sync::atomic::AtomicBool::new(false),
+            input_history_buf: Mutex::new(crate::input_history::InputHistoryBuf::default()),
+            input_history_queue: Mutex::new(Vec::new()),
+            input_history_flushing: std::sync::atomic::AtomicBool::new(false),
             last_self_commit: Mutex::new(None),
             auto_phrase_writes: std::sync::atomic::AtomicUsize::new(0),
             phrases,
@@ -4584,6 +4603,24 @@ impl Coordinator {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clear();
+    }
+
+    /// 仅供测试：就地替换配置快照，模拟「用户在设置里改了配置」之后的热重载结果。
+    ///
+    /// 与 [`Self::reload_user_config`] 的唯一差别是**配置从哪来**：那边从磁盘重读，
+    /// 这里由调用方直接改。bundle 的重建走同一条路（同 `schema_key_union` +
+    /// `ConfigBundle::build`），否则测出来的就不是生产的配置形态。
+    ///
+    /// 为什么需要它：「关掉开关后不再记录，且已有记录不被删」这条只能在**同一个库连接**
+    /// 上验证——redb 是单写者，同一文件二次 `Store::open` 会因文件锁失败，
+    /// 那是测试脚手架问题，与记录逻辑无关。
+    #[cfg(test)]
+    pub(crate) fn set_config_for_test(&self, mutate: impl FnOnce(&mut Config)) {
+        let mut cfg = self.rt().config.clone();
+        mutate(&mut cfg);
+        let keys = schema_key_union(&self.engine_mgr);
+        let bundle = std::sync::Arc::new(ConfigBundle::build(cfg, &keys));
+        *self.rt.write().unwrap_or_else(|e| e.into_inner()) = bundle;
     }
 
     pub fn reload_user_config(&self) -> bool {
