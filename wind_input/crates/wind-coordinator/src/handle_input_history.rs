@@ -693,7 +693,11 @@ mod tests {
         c.note_commit_action(&insert("你好"));
         c.note_commit_action(&insert("世界")); // 同一会话（无 idle 间隔）⇒ 两个片段
         key(&c, VK_BACKSLASH, false);
-        assert_eq!(c.debug_all_candidate_texts(), ["你好世界"], "会话层：整段一条");
+        assert_eq!(
+            c.debug_all_candidate_texts(),
+            ["你好世界"],
+            "会话层：整段一条"
+        );
 
         key(&c, VK_RIGHT, false);
         assert_eq!(
