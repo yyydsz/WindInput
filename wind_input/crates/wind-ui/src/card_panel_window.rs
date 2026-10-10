@@ -36,19 +36,19 @@ use std::rc::Rc;
 use tracing::{info, warn};
 
 use crate::card_panel::{CardItem, CardMetrics, CardPanel, CardPanelEvent, Rect};
-use crate::window::LayeredWindow;
 #[cfg(windows)]
 use crate::card_panel::{PanelMouseKind, PanelPointer};
 #[cfg(windows)]
 use crate::sys::{
-    GetCursorPos, HWND, LPARAM, LRESULT, POINT, ReleaseCapture, SetCapture, WPARAM, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, clamp_to_work_area,
+    GetCursorPos, HWND, LPARAM, LRESULT, POINT, ReleaseCapture, SetCapture, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WPARAM, clamp_to_work_area,
 };
+use crate::window::LayeredWindow;
 // `crate::sys` 只转出窗口/输入那一族，进程运行毫秒数不在其中，故直接取。
 #[cfg(windows)]
-use windows::Win32::System::SystemInformation::GetTickCount64;
-#[cfg(windows)]
 use crate::window::WindowMouse;
+#[cfg(windows)]
+use windows::Win32::System::SystemInformation::GetTickCount64;
 
 /// 窗口类名，仅用于诊断日志区分是哪一个浮层。
 const CLASS_NAME: &str = "WindInputCardPanel";
@@ -115,7 +115,11 @@ fn now_ms() -> u64 {
 fn place_near_cursor(w: u32, h: u32) -> (i32, i32) {
     let mut p = POINT::default();
     let at_cursor = unsafe { GetCursorPos(&mut p) }.is_ok();
-    let (x, y) = if at_cursor { (p.x + 12, p.y + 12) } else { (0, 0) };
+    let (x, y) = if at_cursor {
+        (p.x + 12, p.y + 12)
+    } else {
+        (0, 0)
+    };
     clamp_to_work_area(x, y, w, h)
 }
 #[cfg(not(windows))]
@@ -298,9 +302,7 @@ impl CardPanelWindow {
         if arrived.is_empty() {
             return;
         }
-        let close = arrived
-            .iter()
-            .any(|e| matches!(e, CardPanelEvent::Close));
+        let close = arrived.iter().any(|e| matches!(e, CardPanelEvent::Close));
         self.last_events.extend(arrived);
         if close {
             self.hide();
