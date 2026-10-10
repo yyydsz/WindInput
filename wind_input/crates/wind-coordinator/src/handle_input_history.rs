@@ -279,6 +279,21 @@ impl Coordinator {
         if data.key_code == VK_ESCAPE || data.key_code == VK_BACK {
             if state.special_buffer.is_empty() {
                 self.exit_special_mode(state);
+                // ★★ 必须**显式**隐藏面板。
+                //
+                // `exit_special_mode` 只复位状态字段（`active=None`、清 `special_buffer` /
+                // `candidates` / `preedit` 等），**函数体内没有 `notify_ui_hide`**（见
+                // `handle_special.rs:377–396`）——隐藏是**调用方**的责任：同文件
+                // `special_auto_commit` 就是 `self.exit_special_mode(state);` 紧跟
+                // `self.notify_ui_hide();`（416–417 行），`handle_special_key` 也在每个退出臂
+                // 自行调用（666/689/712/722/737/741/753…）。
+                //
+                // 少了这一行：**模式状态退出了，候选窗却一直挂在屏幕上**——用户实测报的
+                // 「能退出但是输入历史并没有关掉」，且 `Esc` 与删除键**都不关**。
+                // ⚠️ 教训：先前只用 `debug_active_mode() == None` 断言「退出成功」，
+                // 而**面板可见性根本没被覆盖**，故这个缺陷一路活到真机。见本文件测试模块
+                // 对「隐藏未被单测覆盖」的显式声明。
+                self.notify_ui_hide();
                 return KeyAction::ClearComposition;
             }
             // 分词层 → 会话层：清层级位并重建
@@ -805,6 +820,13 @@ mod tests {
     /// ★ 删除键必须能退出面板（用户实测缺陷：原先被取用闸**静默吞掉**，进了面板出不去）。
     ///
     /// 语义与 `Esc` 同义：分词层 → 退回会话层；会话层 → 退出模式。
+    ///
+    /// ⚠️ **本用例只覆盖「模式状态退出」，覆盖不到「候选窗是否真的从屏幕上消失」。**
+    /// 面板可见性由 `notify_ui_hide()` 决定，而它在测试环境里**没有可观测的落点**——
+    /// 先前正是因为只断言了 `debug_active_mode() == None`，才让「退出成功但面板一直挂着」
+    /// 这个缺陷一路活到真机（用户实测：「能退出但是输入历史并没有关掉」，Esc 与删除键都不关）。
+    /// **该缺陷只有真机可见**；退出分支里那一行 `notify_ui_hide()` 的**存在性**靠代码评审
+    /// 与 `handle_special.rs` 的既有先例（`exit_special_mode` + `notify_ui_hide` 成对）保证。
     #[test]
     fn backspace_exits_like_escape() {
         const VK_BACK: u32 = 0x08;
