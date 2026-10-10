@@ -3930,6 +3930,9 @@ pub struct InputConfig {
     /// Unicode 码点输入模式（`u+4e00` → 一）。与 [`Self::url`] 同为前缀夺取式。
     #[serde(default)]
     pub unicode: UnicodeConfig,
+    /// 输入历史：按时间记录实际落屏的文本，供丢失后拼回。见 [`InputHistoryConfig`]。
+    #[serde(default)]
+    pub history: InputHistoryConfig,
     /// 快捷加词面板（目前只有候选布局一项；进入方式是 keys.add_word 热键）。
     #[serde(default)]
     pub add_word: AddWordConfig,
@@ -4040,6 +4043,7 @@ impl Default for InputConfig {
             url: UrlConfig::default(),
             email: EmailConfig::default(),
             unicode: UnicodeConfig::default(),
+            history: InputHistoryConfig::default(),
             add_word: AddWordConfig::default(),
             s2t: S2TConfig::default(),
             t2s: T2SConfig::default(),
@@ -4685,6 +4689,62 @@ pub struct UrlConfig {
 
 fn default_url_history_max() -> u32 {
     200
+}
+
+/// 输入历史（`input.history.*`）：把**实际落屏**的文本按时间记进本地库，供丢失后拼回。
+///
+/// # 与 [`UrlConfig::history_enabled`] 的默认值刻意相反
+///
+/// 那里的历史是**附加能力**（网址模式本可以不记任何东西），故默认关；这里的历史**就是功能
+/// 本身**——关掉它，这一整块能力不存在。故默认开。
+///
+/// # 关掉之后不删已记的
+///
+/// 开关的语义是「**不再产生新记录**」，不是「销毁已有记录」。数据是用户的，替他删东西
+/// 不该是一个开关的副作用；清理走 `Store::clear_input_history`。
+///
+/// # `idle_break_ms` 为什么是配置项
+///
+/// 「一次连续输入」的边界只能由**停顿**近似——用户心里的一条消息，程序只看得到键与键之间
+/// 的间隔。阈值取小了会把一句话切成几段（恢复时要多选几次），取大了会把两条不同的消息
+/// 并成一段（恢复时多带无关内容）。默认 3000ms 是「想词时的自然停顿」与「发完消息再打」
+/// 之间的折中；打字快慢因人而异，故留给用户。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InputHistoryConfig {
+    /// 是否记录输入历史，默认**开启**。
+    #[serde(default = "default_input_history_enabled")]
+    pub enabled: bool,
+    /// 会话条数上限，超出时按**时间**淘汰最旧的（0 = 不限）。
+    ///
+    /// 淘汰按时间而非按使用次数：本表的用途是「找回刚打的东西」，一条只打过一次的新记录
+    /// 恒比一条打过十次的旧记录更该留（这正是它不复用 `completion` 那张 LFU 表的理由）。
+    #[serde(default = "default_input_history_max_sessions")]
+    pub max_sessions: u32,
+    /// 会话断点：连续上屏之间停顿超过这个毫秒数即视为新的一段（默认 3000）。
+    #[serde(default = "default_input_history_idle_break_ms")]
+    pub idle_break_ms: u32,
+}
+
+fn default_input_history_enabled() -> bool {
+    true
+}
+
+fn default_input_history_max_sessions() -> u32 {
+    500
+}
+
+fn default_input_history_idle_break_ms() -> u32 {
+    3000
+}
+
+impl Default for InputHistoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_input_history_enabled(),
+            max_sessions: default_input_history_max_sessions(),
+            idle_break_ms: default_input_history_idle_break_ms(),
+        }
+    }
 }
 
 fn default_url_prefixes() -> Vec<String> {

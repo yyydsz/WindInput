@@ -106,6 +106,25 @@ pub(crate) const CHARSET_USER: TableDefinition<&str, &[u8]> = TableDefinition::n
 /// [`COMMON_CHARS`] 的判据。与 [`FREQ`] 的分界见 [`crate::completion`] 模块文档。
 /// 新表无需迁移：`init_tables` 在写事务里 `open_table` 即创建。
 pub(crate) const COMPLETION: TableDefinition<&str, &[u8]> = TableDefinition::new("completion");
+/// 输入历史**会话层**：key = `"{start_ms:020}\0{seq:010}"`，value = 记录 JSON。
+///
+/// 定宽零填充使**字典序等于时间序**——redb 只有升序 range 扫描，定宽是「按时间取」成立的
+/// 前提（同 [`STATS_DAILY`] 的 `YYYY-MM-DD` 用同一招）。与 [`COMPLETION`] 的分界见
+/// [`crate::input_history`] 模块文档：那张表答「用过几次」（LFU，key 带文本，同一文本反复用
+/// 只累加计数），本表答「**什么时候**打过什么」（时间序列，同一文本两次就是两条）。
+/// **键不带方案**——「我上一段打的是什么」与用五笔还是拼音无关，同 [`COMMON_CHARS`] 的判据。
+/// 新表无需迁移：`init_tables` 在写事务里 `open_table` 即创建。
+pub(crate) const INPUT_SESSIONS: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("input_sessions");
+/// 输入历史**片段层**：key = `"{会话键}\0{ordinal:06}"`，value = 记录 JSON。
+///
+/// 与 [`INPUT_SESSIONS`] 同生共死：删会话必须连带删它的片段（收口在
+/// [`Store::remove_input_session`]），否则会留下取不出来的孤儿行——而除
+/// [`Store::clear_input_history`] 之外再无入口能清掉它们。
+/// ⚠️ 片段键**必须带分隔符**：`scan_prefix` 不带的话，会话 `…\0{seq=1}` 的片段扫描会命中
+/// `…\0{seq=10}` 的片段（守门测试见 `input_history::tests`）。
+pub(crate) const INPUT_SEGMENTS: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("input_segments");
 /// 全局短语：key = "{code}\0{text}"
 pub(crate) const PHRASES: TableDefinition<&str, &[u8]> = TableDefinition::new("phrases");
 /// 每日统计：key = "YYYY-MM-DD"
@@ -243,6 +262,8 @@ impl Store {
             w.open_table(COMMON_CHARS)?;
             w.open_table(CHARSET_USER)?;
             w.open_table(COMPLETION)?;
+            w.open_table(INPUT_SESSIONS)?;
+            w.open_table(INPUT_SEGMENTS)?;
             w.open_table(PHRASES)?;
             w.open_table(STATS_DAILY)?;
             w.open_table(META)?;

@@ -12,6 +12,7 @@ pub mod dict_export;
 pub mod draft_words;
 pub mod freq;
 pub mod import_formats;
+pub mod input_history;
 pub mod migration;
 pub mod phrase_text;
 pub mod phrases;

@@ -488,6 +488,12 @@ static REGISTRY: &[ConfigField] = &[
     // Unicode 码点输入（`u+4e00` → 一）。与 url 同为前缀夺取式模式，故字段形态一致。
     f("input.unicode.enabled", Bool),
     f("input.unicode.prefixes", StrList),
+    // 输入历史：把**实际落屏**的文本按时间记进本地库，供丢失后拼回。
+    // 默认**开**——与上面 input.url.history_enabled 的默认关刻意相反：那里的历史是附加能力
+    // （网址模式本可以不记任何东西），这里的历史就是功能本身。理由见 `InputHistoryConfig`。
+    f("input.history.enabled", Bool),
+    f("input.history.max_sessions", Int),
+    f("input.history.idle_break_ms", Int),
     // 生僻字模式。刻意没有 enabled——不绑键即进不去，见 `RareCharConfig`。
     // trigger_keys 与其余五处同：normalize 折算进 keys.key_actions 后清空，
     // 留在此处是**出厂声明处** + 设置端 key_action 控件的标识符。

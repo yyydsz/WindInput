@@ -1102,6 +1102,16 @@ enabled = false
 prefixes = ["u+", "U+"]
 candidate_layout = "follow"
 
+# 输入历史：按时间把**实际落屏**的文本记进本地库，供「打完字没复制、发送失败内容丢了」
+# 之后从专用恢复入口挑片段拼回。
+# 默认开启；关掉只是不再产生新记录，不会删已记的（清理走设置页的清空入口）。
+# max_sessions 超出时按**时间**淘汰最旧的（不是按使用次数——一条只打过一次的新记录
+# 恒比打过十次的旧记录更该留）。idle_break_ms 是会话断点：连续上屏间停顿超过它就算新的一段。
+[input.history]
+enabled = true
+max_sessions = 500
+idle_break_ms = 3000
+
 # 快捷加词面板（Ctrl+= 进入，见 [keys] add_word）。
 # 默认竖排：逐字确认的面板竖排更易读。此前是硬编码强制竖排、没有开关。
 [input.add_word]
