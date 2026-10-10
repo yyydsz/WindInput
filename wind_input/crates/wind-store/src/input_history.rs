@@ -210,7 +210,10 @@ impl Store {
     }
 
     /// 取某会话的全部片段，**按落屏先后**（不是倒序——拼回时要顺着读）。
-    pub fn list_input_segments(&self, session_key: &str) -> anyhow::Result<Vec<InputSegmentRecord>> {
+    pub fn list_input_segments(
+        &self,
+        session_key: &str,
+    ) -> anyhow::Result<Vec<InputSegmentRecord>> {
         let scan = segment_prefix(session_key);
         self.with_db(|db| {
             let txn = db.begin_read()?;
@@ -375,13 +378,26 @@ mod tests {
     #[test]
     fn sessions_are_newest_first() {
         let (s, p) = store();
-        let a = s.append_input_session(1000, 1100, "第一段", &[seg("第一段", 1000)]).unwrap().unwrap();
-        let b = s.append_input_session(5000, 5100, "第二段", &[seg("第二段", 5000)]).unwrap().unwrap();
-        let c = s.append_input_session(9000, 9100, "第三段", &[seg("第三段", 9000)]).unwrap().unwrap();
+        let a = s
+            .append_input_session(1000, 1100, "第一段", &[seg("第一段", 1000)])
+            .unwrap()
+            .unwrap();
+        let b = s
+            .append_input_session(5000, 5100, "第二段", &[seg("第二段", 5000)])
+            .unwrap()
+            .unwrap();
+        let c = s
+            .append_input_session(9000, 9100, "第三段", &[seg("第三段", 9000)])
+            .unwrap()
+            .unwrap();
         let (rows, total) = s.list_input_sessions(0, 0).unwrap();
         assert_eq!(total, 3);
         let order: Vec<&str> = rows.iter().map(|(_, r)| r.text.as_str()).collect();
-        assert_eq!(order, vec!["第三段", "第二段", "第一段"], "最新的必须在最前");
+        assert_eq!(
+            order,
+            vec!["第三段", "第二段", "第一段"],
+            "最新的必须在最前"
+        );
         assert_eq!(rows[0].0, c);
         assert_eq!(rows[2].0, a);
         assert_ne!(a, b);
@@ -392,8 +408,14 @@ mod tests {
     #[test]
     fn same_millisecond_sessions_do_not_collide() {
         let (s, p) = store();
-        let k1 = s.append_input_session(1000, 1000, "甲", &[seg("甲", 1000)]).unwrap().unwrap();
-        let k2 = s.append_input_session(1000, 1000, "乙", &[seg("乙", 1000)]).unwrap().unwrap();
+        let k1 = s
+            .append_input_session(1000, 1000, "甲", &[seg("甲", 1000)])
+            .unwrap()
+            .unwrap();
+        let k2 = s
+            .append_input_session(1000, 1000, "乙", &[seg("乙", 1000)])
+            .unwrap()
+            .unwrap();
         assert_ne!(k1, k2);
         assert_eq!(s.count_input_sessions().unwrap(), 2);
         assert_eq!(s.list_input_segments(&k1).unwrap()[0].text, "甲");
@@ -443,14 +465,24 @@ mod tests {
         let (s, p) = store();
         let keys: Vec<String> = (0..12)
             .map(|i| {
-                s.append_input_session(1000 + i, 1001 + i, &format!("第{i}段"), &[seg(&format!("片{i}"), 1000 + i)])
-                    .unwrap()
-                    .unwrap()
+                s.append_input_session(
+                    1000 + i,
+                    1001 + i,
+                    &format!("第{i}段"),
+                    &[seg(&format!("片{i}"), 1000 + i)],
+                )
+                .unwrap()
+                .unwrap()
             })
             .collect();
         for (i, k) in keys.iter().enumerate() {
             let segs = s.list_input_segments(k).unwrap();
-            assert_eq!(segs.len(), 1, "会话 {i} 只该有 1 个片段，实际 {}", segs.len());
+            assert_eq!(
+                segs.len(),
+                1,
+                "会话 {i} 只该有 1 个片段，实际 {}",
+                segs.len()
+            );
             assert_eq!(segs[0].text, format!("片{i}"), "取到了别的会话的片段");
         }
         let _ = std::fs::remove_file(&p);
@@ -466,15 +498,24 @@ mod tests {
         assert!(s.remove_input_session(&key).unwrap());
         assert!(!s.remove_input_session(&key).unwrap(), "删第二次报 false");
         assert_eq!(s.count_input_sessions().unwrap(), 0);
-        assert!(s.list_input_segments(&key).unwrap().is_empty(), "孤儿片段必须一起走");
+        assert!(
+            s.list_input_segments(&key).unwrap().is_empty(),
+            "孤儿片段必须一起走"
+        );
         let _ = std::fs::remove_file(&p);
     }
 
     #[test]
     fn clear_removes_everything() {
         let (s, p) = store();
-        let k1 = s.append_input_session(1, 2, "甲", &[seg("甲", 1)]).unwrap().unwrap();
-        let _k2 = s.append_input_session(3, 4, "乙", &[seg("乙", 3)]).unwrap().unwrap();
+        let k1 = s
+            .append_input_session(1, 2, "甲", &[seg("甲", 1)])
+            .unwrap()
+            .unwrap();
+        let _k2 = s
+            .append_input_session(3, 4, "乙", &[seg("乙", 3)])
+            .unwrap()
+            .unwrap();
         assert_eq!(s.clear_input_history().unwrap(), 2);
         assert_eq!(s.count_input_sessions().unwrap(), 0);
         assert!(s.list_input_segments(&k1).unwrap().is_empty());
@@ -486,9 +527,14 @@ mod tests {
     fn prune_keeps_the_newest() {
         let (s, p) = store();
         for i in 0..5 {
-            s.append_input_session(1000 * (i + 1), 1000 * (i + 1) + 1, &format!("第{i}段"), &[seg(&format!("片{i}"), 1000 * (i + 1))])
-                .unwrap()
-                .unwrap();
+            s.append_input_session(
+                1000 * (i + 1),
+                1000 * (i + 1) + 1,
+                &format!("第{i}段"),
+                &[seg(&format!("片{i}"), 1000 * (i + 1))],
+            )
+            .unwrap()
+            .unwrap();
         }
         assert_eq!(s.prune_input_history(2).unwrap(), 3, "5 条裁到 2 条应删 3");
         let (rows, total) = s.list_input_sessions(0, 0).unwrap();
@@ -506,7 +552,9 @@ mod tests {
     #[test]
     fn prune_noop_when_under_limit() {
         let (s, p) = store();
-        s.append_input_session(1, 2, "只有一条", &[]).unwrap().unwrap();
+        s.append_input_session(1, 2, "只有一条", &[])
+            .unwrap()
+            .unwrap();
         assert_eq!(s.prune_input_history(10).unwrap(), 0);
         assert_eq!(s.prune_input_history(0).unwrap(), 0, "0 = 不限，不裁剪");
         assert_eq!(s.count_input_sessions().unwrap(), 1);
@@ -524,7 +572,11 @@ mod tests {
         let (page, total) = s.list_input_sessions(1, 2).unwrap();
         assert_eq!(total, 5);
         let texts: Vec<&str> = page.iter().map(|(_, r)| r.text.as_str()).collect();
-        assert_eq!(texts, vec!["第3段", "第2段"], "倒序下 offset=1 应跳过最新的那条");
+        assert_eq!(
+            texts,
+            vec!["第3段", "第2段"],
+            "倒序下 offset=1 应跳过最新的那条"
+        );
         let _ = std::fs::remove_file(&p);
     }
 }
