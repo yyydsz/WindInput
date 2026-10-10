@@ -268,9 +268,15 @@ impl Coordinator {
         state: &mut State,
         data: &KeyEventData,
     ) -> KeyAction {
-        use wind_keys::keymap::{VK_ESCAPE, VK_RIGHT};
+        use wind_keys::keymap::{VK_BACK, VK_ESCAPE, VK_RIGHT};
 
-        if data.key_code == VK_ESCAPE {
+        // 退出 / 退层：**`Esc` 与删除键同义**。
+        //
+        // ⚠️ 删除键原先落在下面的取用闸里被**静默吞掉**——既不退面板、也不透传，
+        // 实机表现就是「进了面板出不去」（用户实测报告）。本模式没有可编辑的文本缓冲
+        // （`special_buffer` 是层级位，不是编码缓冲），删除键的直觉含义正是「退回去」，
+        // 故与 `Esc` 合并处理，符合 special 族「退到空缓冲即退出」的既有习惯。
+        if data.key_code == VK_ESCAPE || data.key_code == VK_BACK {
             if state.special_buffer.is_empty() {
                 self.exit_special_mode(state);
                 return KeyAction::ClearComposition;
@@ -360,6 +366,9 @@ impl Coordinator {
     ///
     /// 会话层与分词层的候选**都能取用**（会话层取整段、分词层取单段），故这里只看
     /// 候选是否属于本模式，不看层级。
+    ///
+    /// ⚠️ **鼠标点选不走这里**：那条路按**被点的那条**（`idx`）取，
+    /// 用高亮会「点 A 插 B」（见 `handle_candidate.rs::select_candidate_at` 的对应臂）。
     fn take_highlighted_input_history(&self, state: &State) -> Option<String> {
         let idx = self.highlighted_index(state)?;
         let cand = state.candidates.get(idx)?;
@@ -589,7 +598,8 @@ mod tests {
             })
         };
 
-        for vk in [VK_A, VK_Z, VK_BACK] {
+        // 字母键：既不上屏、也不改模式 / 列表
+        for vk in [VK_A, VK_Z] {
             let dbg = format!("{:?}", press(vk));
             assert!(
                 !dbg.contains(secret),
@@ -607,13 +617,30 @@ mod tests {
             );
         }
 
-        // 对照：空格仍然取用（闸只拦非取用键）
+        // 对照：空格仍然取用（闸只拦非取用键）。
+        // ⚠️ 必须在**删除键之前**测：删除键的语义是退出模式（见下），
+        // 放到它后面做对照时模式已经没了，空格自然拿不到取用动作（曾因此假红一次）。
         let dbg = format!("{:?}", press(VK_SPACE));
         assert!(dbg.contains(secret), "空格仍应取用高亮那条，实际动作 {dbg}");
         assert_eq!(
             c.debug_active_mode(),
             Some("input_history"),
             "取用后仍留在模式里"
+        );
+
+        // 删除键：**同样不得上屏**；但它的语义是「退回去」，故这里期望**退出模式**
+        //（专项用例见 `backspace_exits_like_escape`）。
+        // ⚠️ 本条曾断言「删除键后仍留在模式里」——那是删除键被静默吞掉时的旧期望，
+        // 随行为修正一并更新；「不得写入宿主」这条核心断言**原样保留**。
+        let dbg = format!("{:?}", press(VK_BACK));
+        assert!(
+            !dbg.contains(secret),
+            "★ 删除键不得把历史写进宿主，实际动作 {dbg}"
+        );
+        assert_eq!(
+            c.debug_active_mode(),
+            None,
+            "删除键退出面板（不再是被吞掉后停在模式里）"
         );
     }
 
@@ -772,6 +799,68 @@ mod tests {
             c.debug_all_candidate_texts(),
             ["已封口未落库"],
             "★ 队列那条也要能展开到片段"
+        );
+    }
+
+    /// ★ 删除键必须能退出面板（用户实测缺陷：原先被取用闸**静默吞掉**，进了面板出不去）。
+    ///
+    /// 语义与 `Esc` 同义：分词层 → 退回会话层；会话层 → 退出模式。
+    #[test]
+    fn backspace_exits_like_escape() {
+        const VK_BACK: u32 = 0x08;
+        let c = coord("backexit", 3000);
+        seed(&c, 9000, "第一段", &["第一段"]);
+
+        // 会话层按删除键 → **退出模式**
+        key(&c, VK_BACKSLASH, false);
+        assert_eq!(c.debug_active_mode(), Some("input_history"));
+        key(&c, VK_BACK, false);
+        assert_eq!(
+            c.debug_active_mode(),
+            None,
+            "★ 会话层按删除键必须退出面板（原先什么也不做）"
+        );
+
+        // 分词层按删除键 → **退回会话层**，不退模式
+        key(&c, VK_BACKSLASH, false);
+        key(&c, VK_RIGHT, false); // 展开为分词层
+        assert_eq!(c.debug_all_candidate_texts(), ["第一段"]);
+        key(&c, VK_BACK, false);
+        assert_eq!(
+            c.debug_active_mode(),
+            Some("input_history"),
+            "分词层按删除键只退一层，不退出模式"
+        );
+    }
+
+    /// ★★ **点 A 取 A**：按**被点的下标**取，不是高亮那条。
+    ///
+    /// 「点 A 插 B」比「点了没反应」更难发现——用户会以为是自己点歪了。鼠标通路
+    /// （`select_candidate_at` 的 `InputHistory` 臂）正是按 `idx = start + page_local`
+    /// 取的；本用例钉住同一个语义（该臂与 `commit_input_history_selected` 共用
+    /// 「候选 id 前缀 + 非空」的命中判据）。
+    #[test]
+    fn selected_by_clicked_index_not_highlight() {
+        let c = coord("mouseidx", 3000);
+        seed(&c, 1000, "第二条", &["第二条"]);
+        seed(&c, 9000, "第一条", &["第一条"]);
+        key(&c, VK_BACKSLASH, false);
+        assert_eq!(
+            c.debug_all_candidate_texts(),
+            ["第一条", "第二条"],
+            "前提：列表时间倒序，高亮默认在第 0 条"
+        );
+
+        // 取**被点的那条**（下标 1），高亮仍在第 0 条
+        let mut st = c.state.lock().unwrap_or_else(|e| e.into_inner());
+        let dbg = format!("{:?}", c.commit_input_history_selected(&mut st, 1));
+        assert!(
+            dbg.contains("第二条"),
+            "★ 必须取被点下标那条（第二条），实际动作 {dbg}"
+        );
+        assert!(
+            !dbg.contains("第一条"),
+            "★ 不得取成高亮那条（第一条）——那是「点 A 插 B」，实际动作 {dbg}"
         );
     }
 

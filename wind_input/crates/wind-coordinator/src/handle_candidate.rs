@@ -5129,8 +5129,49 @@ impl Coordinator {
             Some(ModeKind::Special(_)) | Some(ModeKind::RareChar) | Some(ModeKind::Reverse) => {
                 self.commit_special_candidate(&mut state, idx)
             }
-            // 输入历史恢复：鼠标点选与键盘选词**同一出口**（同样是「取用后留在模式里」）。
-            Some(ModeKind::InputHistory) => self.commit_input_history_selected(&mut state, idx),
+            // 输入历史恢复：鼠标点选。
+            //
+            // ⚠️ **必须按被点的那条（`idx`）取，不是高亮那条**：`mouse_select_action` 算的是
+            // `idx = start + page_local`，高亮未必在它上面 ⇒ 取高亮会「点 A 插 B」，
+            // 比「点了没反应」更难发现。同 `Url`/`Email` 臂的注意事项。
+            //
+            // ⚠️ 也**不能**走 `commit_input_history_selected`（内部 `commit_then_new_composition`
+            // → 返回 `UpdateComposition`）：鼠标点击不在 `OnKeyDown` 应答里，只能经 push 管道，
+            // 而 `push_no_key_ctx_action` 对 `UpdateComposition` **只推 preedit、不推正文**
+            // ⇒ 正文丢失，实机表现是「点了像没反应」（用户实测）。
+            //
+            // 正文经**统一出口** `push_no_key_ctx_action` 推（复用其 `convert_commit_newline`
+            // 规范化，不在调用点另写一遍编码），随后单独补一帧组合区让面板留活、可继续点。
+            Some(ModeKind::InputHistory) => {
+                let text = state
+                    .candidates
+                    .get(idx)
+                    .filter(|c| {
+                        c.id.starts_with(crate::handle_input_history::INPUT_HISTORY_ID)
+                            && !c.text.is_empty()
+                    })
+                    .map(|c| c.text.clone());
+                let chinese_mode = state.chinese_mode;
+                let preedit = state.preedit.clone();
+                let Some(text) = text else { return None };
+                drop(state);
+                self.push_no_key_ctx_action(
+                    &KeyAction::InsertText {
+                        text,
+                        new_composition: None,
+                        mode_changed: false,
+                        chinese_mode,
+                        has_new_composition: false,
+                    },
+                    chinese_mode,
+                );
+                self.push_server.push_commit_to_active(
+                    &wind_ipc::codec::encode_update_composition(&preedit, 0),
+                );
+                // 不记文本本身（根 AGENTS.md：日志不得含用户输入）。
+                debug!("input-history: 鼠标点选取用一条（正文已推、组合区留活）");
+                return None;
+            }
             // 网址 / 邮箱：键盘侧不按序号选词（数字是合法字符），但鼠标点选须与空格走同一个
             // 出口（记统计、学后缀 / 网址历史）。出口按高亮取候选，故先把高亮移到被点的那条
             // （移动端不翻页、`idx` 可越出当页，页码一并换算）。
