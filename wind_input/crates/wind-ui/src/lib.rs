@@ -19,6 +19,7 @@
 
 pub mod auto_hide;
 pub mod candidate_window;
+pub mod card_panel;
 /// macOS 全局热键（Carbon RegisterEventHotKey）。对位 Windows 的 RegisterHotKey 分支。
 pub mod caret_overlay;
 pub mod debounce;
