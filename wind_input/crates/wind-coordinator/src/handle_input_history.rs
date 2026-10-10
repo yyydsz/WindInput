@@ -170,9 +170,13 @@ impl Coordinator {
 
     /// 本模式内的按键处理。
     ///
-    /// 键角色：`Esc` 退一层（分词层 → 会话层；会话层 → 退出模式）、方向键 / 翻页走
-    /// [`Coordinator::apply_nav_key`]（统一入口，禁另写一套）、`VK_RIGHT` 展开为分词、
-    /// 空格与数字键取用当前高亮。
+    /// 键角色：`Esc` 退一层（分词层 → 会话层；会话层 → 退出模式）、方向键 / 翻页走统一入口
+    /// [`Coordinator::handle_candidate_nav`]（`handle_candidate.rs`，内部
+    /// `apply_session_action`；禁在本模式另写一套）、`VK_RIGHT` 展开为分词、
+    /// **空格 / 回车 / 数字键**取用当前高亮，**其余键一律吞掉**。
+    ///
+    /// ⚠️ 根 AGENTS.md 里点名的 `apply_nav_key` 在当前代码中已不存在（该引用已过期），
+    /// 上一条的 `handle_candidate_nav` 才是实际入口。
     pub(crate) fn handle_input_history_key(
         &self,
         state: &mut State,
@@ -217,13 +221,26 @@ impl Coordinator {
             return act;
         }
 
+        // ★ 取用闸：**只有空格 / 回车 / 数字键**才把高亮项写进宿主。
+        //
+        // 这道闸不是装饰。`take_highlighted_input_history` 只看候选 id 前缀、**不看按键**，
+        // 少了它，候选非空时任何未被上面消费的键（字母、标点、退格…）都会触发一次插入——
+        // 连按即把同一段历史反复打进宿主，而历史里装的正是用户刚丢的正文。
+        if !matches!(
+            data.key_code,
+            keymap::VK_SPACE | keymap::VK_RETURN | keymap::VK_0..=keymap::VK_9
+        ) {
+            // 其余键一律吞掉，别漏进主输入流（本模式不吃编码）。
+            return KeyAction::Consumed;
+        }
+
         // 取用：插入选中文本，**留在模式里**（这正是「连续选多条拼回」）
         match self.take_highlighted_input_history(state) {
             Some(text) if !text.is_empty() => {
                 let comp = state.preedit.clone();
                 self.commit_then_new_composition(text, comp)
             }
-            // 没有候选、或键不是导航/空格/数字：吞掉，别把键漏进主输入流（本模式不吃编码）。
+            // 候选为空（或高亮项不是历史）：同样是吞掉，不上屏任何东西。
             _ => KeyAction::Consumed,
         }
     }
@@ -439,6 +456,69 @@ mod tests {
         assert!(
             !dbg.contains("第一条"),
             "不得取到未高亮的第一条，实际动作 {dbg}"
+        );
+        assert_eq!(
+            c.debug_active_mode(),
+            Some("input_history"),
+            "取用后仍留在模式里"
+        );
+    }
+
+    /// ★★ 取用闸：候选**非空**时按字母 / 退格键**不得**把高亮的历史写进宿主。
+    ///
+    /// 这是「手滑一次就是一次历史误插入」的守门测试——历史里装的正是用户刚丢的正文，
+    /// 误插入比不插入更糟。同时用空格做对照，证明这道闸没把正常取用路径一起堵死。
+    #[test]
+    fn non_take_keys_do_not_insert_history() {
+        const VK_A: u32 = 0x41;
+        const VK_Z: u32 = 0x5A;
+        const VK_BACK: u32 = 0x08;
+        let secret = "不该被插进去的一段";
+
+        let c = coord("gate", 3000);
+        seed(&c, 9000, secret, &[secret]);
+        key(&c, VK_BACKSLASH, false);
+        assert_eq!(
+            c.debug_all_candidate_texts(),
+            [secret],
+            "前提：进入模式后候选非空"
+        );
+
+        let press = |vk: u32| {
+            c.handle_key_event(&KeyEventData {
+                key_code: vk,
+                scan_code: 0,
+                modifiers: 0,
+                event_type: EVENT_KEY_DOWN,
+                toggles: 0,
+                event_seq: 0,
+                prev_char: 0,
+            })
+        };
+
+        for vk in [VK_A, VK_Z, VK_BACK] {
+            let dbg = format!("{:?}", press(vk));
+            assert!(
+                !dbg.contains(secret),
+                "★ 键 0x{vk:X} 不得把历史写进宿主，实际动作 {dbg}"
+            );
+            assert_eq!(
+                c.debug_active_mode(),
+                Some("input_history"),
+                "键 0x{vk:X} 之后仍应留在模式里"
+            );
+            assert_eq!(
+                c.debug_all_candidate_texts(),
+                [secret],
+                "键 0x{vk:X} 之后列表不应变化"
+            );
+        }
+
+        // 对照：空格仍然取用（闸只拦非取用键）
+        let dbg = format!("{:?}", press(VK_SPACE));
+        assert!(
+            dbg.contains(secret),
+            "空格仍应取用高亮那条，实际动作 {dbg}"
         );
         assert_eq!(
             c.debug_active_mode(),
