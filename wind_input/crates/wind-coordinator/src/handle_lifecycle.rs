@@ -611,6 +611,16 @@ impl Coordinator {
                 debug!("key_action: entering reverse mode");
                 Some(self.enter_reverse_mode(state, key_code))
             }
+            // 输入历史恢复的门卫：**存储开关**。关掉即不再记录，也就无从恢复——
+            // 本模式因此没有自己的总开关（同 reverse「不绑键即进不去」的处置）。
+            // 门卫没过返回 None，触发键落普通输入，不吞键。
+            BoundAction::InputHistory => {
+                if !self.input_history_mode_available() {
+                    return None;
+                }
+                debug!("key_action: entering input-history mode");
+                Some(self.enter_input_history_mode(state, key_code))
+            }
             // 软键盘不是「模式」，没有编码缓冲也不进 ModeKind——直接开关面板即可。
             // 状态推送由按键路径顶层的 SoftKeyboardPushOnDrop 兜底。
             BoundAction::SoftKeyboard(page) => Some(self.toggle_softkeyboard(page.as_deref())),
@@ -820,6 +830,8 @@ impl Coordinator {
             | BoundAction::SwitchSchema(_)
             | BoundAction::Action(_)
             | BoundAction::Command(_) => true,
+            // 输入历史恢复：要建 overlay（`&mut State`）⇒ 调用方持锁，同 special 一族。
+            BoundAction::InputHistory => false,
             // 建 overlay，要 `&mut State` ⇒ 调用方持锁。
             //
             // ★ `SoftKeyboard` 在这里是 `false`，但它**也要在锁外执行**：
@@ -968,6 +980,7 @@ impl Coordinator {
             BoundAction::AuxCode => ModeKind::AuxCode,
             BoundAction::RareChar => ModeKind::RareChar,
             BoundAction::Reverse => ModeKind::Reverse,
+            BoundAction::InputHistory => ModeKind::InputHistory,
             BoundAction::Special(id) => ModeKind::Special(self.special_mode_idx(id)?),
             BoundAction::Mix(id) => ModeKind::Mix(self.mix_mode_idx(id)?),
             // 不建 overlay ⇒ 没有可比对的模式身份。软键盘有自己的开关态，幂等由

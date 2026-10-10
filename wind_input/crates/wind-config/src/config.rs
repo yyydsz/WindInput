@@ -1600,6 +1600,11 @@ pub enum BoundAction {
     /// 进反查模式：输入**本方案编码**（含通配，任何位置都可通配），只查主码表
     /// （reverse-mode spec §3）。无载荷，单例。
     Reverse,
+    /// 进输入历史恢复模式：按时间倒序列出最近的输入会话，可连续选中拼回。
+    ///
+    /// 无载荷，单例。**出厂不绑键**——同 [`Self::Reverse`] 的处置：能不能进只看有没有绑这个
+    /// 动词，不给它单独的总开关。存储那道闸是 `input.history.enabled`（关掉时本模式进不去）。
+    InputHistory,
     /// 进指定融合模式（携带实例 id）。
     Mix(String),
     /// 进指定特殊模式（携带实例 id）。
@@ -1757,6 +1762,7 @@ impl BoundAction {
             | Self::AuxCode
             | Self::RareChar
             | Self::Reverse
+            | Self::InputHistory
             | Self::Mix(_)
             | Self::Special(_) => true,
             // 字词范围切的是「这一码出什么」，没有中文候选就无从谈起。
@@ -1850,6 +1856,7 @@ impl BoundAction {
             "aux_code" => Self::AuxCode,
             "rare_char" => Self::RareChar,
             "reverse" => Self::Reverse,
+            "input_history" => Self::InputHistory,
             "softkeyboard" => Self::SoftKeyboard(None),
             a if Self::DISPATCH_ACTIONS.contains(&a) => Self::Action(a.to_string()),
             _ => Self::None,

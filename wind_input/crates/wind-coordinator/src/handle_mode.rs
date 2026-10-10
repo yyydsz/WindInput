@@ -778,6 +778,14 @@ impl Coordinator {
                 }
                 Some(self.commit_and_enter_reverse_mode(state, key_code))
             }
+            // 输入历史恢复：同样顶字重开（用户可能正在打一半，进入前先把那段收下来）。
+            // 门卫是存储开关，没过不吞键。
+            BoundAction::InputHistory => {
+                if !self.input_history_mode_available() {
+                    return None;
+                }
+                Some(self.commit_and_enter_input_history_mode(state, key_code))
+            }
             // 软键盘不是模式，没有「顶字进入」的区别——但既然本函数的语义是「先把已转换
             // 前缀和高亮候选上屏」，这里也要顶，否则开面板会把用户正在打的编码丢掉。
             BoundAction::SoftKeyboard(page) => {
@@ -1608,6 +1616,8 @@ impl Coordinator {
             // 反查模式：同生僻字，单例、名字写死。模式内首位也是通配，不提示的话用户分不清
             // 「z 为什么不是字面 z」。
             ModeKind::Reverse => Some(("反查".to_string(), "反".to_string())),
+            // 输入历史恢复：指示名用全称/短称，同其邻居。
+            ModeKind::InputHistory => Some(("输入历史".to_string(), "历史".to_string())),
             ModeKind::Mix(i) => {
                 let (full, short) = {
                     let rt = self.rt();

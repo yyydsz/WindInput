@@ -55,6 +55,9 @@ pub(crate) fn intent_for(
         // 生僻字模式没有 [overlay] 段可读，布局跟随全局（同辅助码：只筛选、不改呈现形态）。
         Some(ModeKind::RareChar) => None,
         Some(ModeKind::Reverse) => Some(cfg.input.reverse.candidate_layout),
+        // 输入历史恢复：只把已有记录列出来，不改呈现形态，也没有专用布局配置项 ⇒ 跟随全局
+        // （同 `RareChar` / `AuxCode` 的处置）。
+        Some(ModeKind::InputHistory) => None,
         Some(ModeKind::TempPinyin) => Some(cfg.input.temp_pinyin.candidate_layout),
         Some(ModeKind::TempEnglish) => Some(cfg.input.temp_english.candidate_layout),
         Some(ModeKind::Url) => Some(cfg.input.url.candidate_layout),

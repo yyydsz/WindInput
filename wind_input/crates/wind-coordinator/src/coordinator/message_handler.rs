@@ -1359,6 +1359,11 @@ impl MessageHandler for Coordinator {
             Some(ModeKind::Url) => return self.handle_url_key(&mut state, data),
             Some(ModeKind::Email) => return self.handle_email_key(&mut state, data),
             Some(ModeKind::Unicode) => return self.handle_unicode_key(&mut state, data),
+            // 输入历史恢复模式：与 special 族不同，它**不复用** `handle_special_key`
+            // ——那套的选词出口是「选中即退出」，而本模式的用法是连续挑多条拼回。
+            Some(ModeKind::InputHistory) => {
+                return self.handle_input_history_key(&mut state, data);
+            }
             // ★ 生僻字模式复用 special 的整套按键处理（缓冲/光标/退格/选词/翻页）。
             // 两者只差「引擎取哪个方案」与「候选过不过生僻准入」，那两处分别在
             // `overlay_engine_schema` 与 `update_special_candidates` 里分流。

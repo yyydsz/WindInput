@@ -5526,7 +5526,10 @@ impl Coordinator {
             Some(ModeKind::Url) => self.exit_url_mode(state),
             Some(ModeKind::Email) => self.exit_email_mode(state),
             Some(ModeKind::Unicode) => self.exit_unicode_mode(state),
-            Some(ModeKind::Special(_)) | Some(ModeKind::RareChar) | Some(ModeKind::Reverse) => {
+            Some(ModeKind::Special(_))
+            | Some(ModeKind::RareChar)
+            | Some(ModeKind::Reverse)
+            | Some(ModeKind::InputHistory) => {
                 self.exit_special_mode(state)
             }
             Some(ModeKind::Mix(_)) => self.exit_mix_mode(state),

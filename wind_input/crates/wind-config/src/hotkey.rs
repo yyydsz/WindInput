@@ -83,6 +83,7 @@ fn hotkey_policy_for(action: &crate::config::BoundAction) -> Option<u32> {
         | BA::AuxCode
         | BA::RareChar
         | BA::Reverse
+        | BA::InputHistory
         | BA::Mix(_)
         | BA::Special(_)
         | BA::SoftKeyboard(_) => true,

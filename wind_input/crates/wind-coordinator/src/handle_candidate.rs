@@ -2505,6 +2505,9 @@ impl Coordinator {
             Some(ModeKind::Special(_)) | Some(ModeKind::RareChar) | Some(ModeKind::Reverse) => {
                 self.commit_special_candidate(state, gi)
             }
+            // 输入历史恢复：取用后**留在模式里**（连续选多条拼回），故不复用
+            // `commit_special_candidate`（那条出口是「选中即退出」）。
+            Some(ModeKind::InputHistory) => self.commit_input_history_selected(state, gi),
             Some(ModeKind::Mix(_)) => self.mix_select(state, offset),
             // 网址 / 邮箱模式**有**候选（补全项），但**不能**按序号选中：数字在网址与
             // 邮箱里都是合法字符（`www.163.com`、`abc123@qq.com`），放行序号选词等于
@@ -2574,6 +2577,9 @@ impl Coordinator {
             Some(ModeKind::Special(_)) | Some(ModeKind::RareChar) | Some(ModeKind::Reverse) => {
                 self.commit_special_candidate(state, gi)
             }
+            // 输入历史恢复：取用后**留在模式里**（连续选多条拼回），故不复用
+            // `commit_special_candidate`（那条出口是「选中即退出」）。
+            Some(ModeKind::InputHistory) => self.commit_input_history_selected(state, gi),
             // 重复上屏态不另开分支：`mix_select_at` 自己先判 `mix_repeat` 转交
             // `commit_mix_repeat`，而重复态下候选恒只有一条（`inject_mix_repeat_candidate`
             // 整体替换候选后 `update_mix_candidates` 当场返回，不做变体展开等追加），高亮
@@ -2890,6 +2896,9 @@ impl Coordinator {
             }
             // 辅助码缓冲纯追加（尾增尾删，无光标编辑），不走 BufEdit。
             ModeKind::AuxCode => return None,
+            // 输入历史恢复同理：`special_buffer` 在这里是**层级位**（空 = 会话层 / 会话键 = 分词层），
+            // 不是可编辑的文本缓冲——让它进 `BufEdit` 会让退格/光标把层级位改坏。
+            ModeKind::InputHistory => return None,
         })
     }
 
@@ -2900,6 +2909,8 @@ impl Coordinator {
     /// `overlay_body`；临英 / 特殊 / URL 的主体恒等于自身缓冲，直接用缓冲。
     fn overlay_caret_parts(state: &State) -> Option<(String, &str, &str, usize)> {
         Some(match state.active? {
+            // 输入历史恢复：组合区是**固定标签**，没有可编辑缓冲，也就没有 caret 四要素。
+            ModeKind::InputHistory => return None,
             ModeKind::TempPinyin => (
                 format!("{}{}", state.temp_pinyin_prefix, state.committed_text),
                 &state.temp_pinyin_buffer,
@@ -5117,6 +5128,10 @@ impl Coordinator {
             Some(ModeKind::Mix(_)) => self.mix_select_at(&mut state, idx, page_local_pos),
             Some(ModeKind::Special(_)) | Some(ModeKind::RareChar) | Some(ModeKind::Reverse) => {
                 self.commit_special_candidate(&mut state, idx)
+            }
+            // 输入历史恢复：鼠标点选与键盘选词**同一出口**（同样是「取用后留在模式里」）。
+            Some(ModeKind::InputHistory) => {
+                self.commit_input_history_selected(&mut state, idx)
             }
             // 网址 / 邮箱：键盘侧不按序号选词（数字是合法字符），但鼠标点选须与空格走同一个
             // 出口（记统计、学后缀 / 网址历史）。出口按高亮取候选，故先把高亮移到被点的那条

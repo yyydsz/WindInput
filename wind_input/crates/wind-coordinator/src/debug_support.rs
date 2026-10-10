@@ -121,6 +121,7 @@ impl Coordinator {
             Some(ModeKind::Special(_)) => Some("special"),
             Some(ModeKind::RareChar) => Some("rare_char"),
             Some(ModeKind::Reverse) => Some("reverse"),
+            Some(ModeKind::InputHistory) => Some("input_history"),
             Some(ModeKind::Mix(_)) => Some("mix"),
             Some(ModeKind::AuxCode) => Some("aux_code"),
             None => None,
