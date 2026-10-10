@@ -152,6 +152,23 @@ impl InputHistoryBuf {
         self.last_ms = 0;
         Some(s)
     }
+
+    /// **只读快照**（不取走）。给召回入口把「还没落库的那段」列出来用。
+    ///
+    /// 为什么需要它：会话只有在下一次上屏判过 idle、或断流事件时才封口入队、再由后台线程落库。
+    /// 用户「打完一段、立刻想找回」时，那段**还在这个缓冲里**——纯读库的候选列表看不见它，
+    /// 于是最需要它的时刻恰恰是空的。快照让它无需写盘就能被列出。
+    pub(crate) fn snapshot(&self) -> Option<ClosedSession> {
+        if self.is_empty() {
+            return None;
+        }
+        Some(ClosedSession {
+            start_ms: self.start_ms,
+            end_ms: self.last_ms,
+            text: self.text.clone(),
+            segments: self.segments.clone(),
+        })
+    }
 }
 
 /// 当前 Unix 毫秒。
