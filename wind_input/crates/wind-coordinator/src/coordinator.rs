@@ -5529,9 +5529,7 @@ impl Coordinator {
             Some(ModeKind::Special(_))
             | Some(ModeKind::RareChar)
             | Some(ModeKind::Reverse)
-            | Some(ModeKind::InputHistory) => {
-                self.exit_special_mode(state)
-            }
+            | Some(ModeKind::InputHistory) => self.exit_special_mode(state),
             Some(ModeKind::Mix(_)) => self.exit_mix_mode(state),
             // ★ 辅助码要**两步**：`exit_aux_code` 是本仓唯一一个「退出后主组合仍存活」的
             // 退出函数——它按设计还原拼音候选与 preedit（辅助码只是筛选，Esc 的语义是

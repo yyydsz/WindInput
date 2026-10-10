@@ -5130,9 +5130,7 @@ impl Coordinator {
                 self.commit_special_candidate(&mut state, idx)
             }
             // 输入历史恢复：鼠标点选与键盘选词**同一出口**（同样是「取用后留在模式里」）。
-            Some(ModeKind::InputHistory) => {
-                self.commit_input_history_selected(&mut state, idx)
-            }
+            Some(ModeKind::InputHistory) => self.commit_input_history_selected(&mut state, idx),
             // 网址 / 邮箱：键盘侧不按序号选词（数字是合法字符），但鼠标点选须与空格走同一个
             // 出口（记统计、学后缀 / 网址历史）。出口按高亮取候选，故先把高亮移到被点的那条
             // （移动端不翻页、`idx` 可越出当页，页码一并换算）。

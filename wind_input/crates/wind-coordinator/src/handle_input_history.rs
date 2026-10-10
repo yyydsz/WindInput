@@ -370,7 +370,11 @@ mod tests {
         let c = coord("drill", 3000);
         seed(&c, 1000, "你好世界", &["你好", "世界"]);
         key(&c, VK_BACKSLASH, false);
-        assert_eq!(c.debug_all_candidate_texts(), ["你好世界"], "会话层：整段一条");
+        assert_eq!(
+            c.debug_all_candidate_texts(),
+            ["你好世界"],
+            "会话层：整段一条"
+        );
 
         key(&c, VK_RIGHT, false); // 展开
         assert_eq!(

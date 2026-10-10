@@ -114,12 +114,7 @@ impl InputHistoryBuf {
     ///
     /// 达到 [`INPUT_HISTORY_SEGMENTS_MAX`] 时也返回 `true`：就地封段，
     /// 让下一次追加从新会话开始，避免单个会话无界增长。
-    pub(crate) fn push(
-        &mut self,
-        text: &str,
-        now_ms: i64,
-        idle_break_ms: i64,
-    ) -> bool {
+    pub(crate) fn push(&mut self, text: &str, now_ms: i64, idle_break_ms: i64) -> bool {
         if text.is_empty() {
             return false;
         }
@@ -630,11 +625,7 @@ mod tests {
             sessions(&c)
         );
         assert_eq!(
-            c.store
-                .as_ref()
-                .unwrap()
-                .count_input_sessions()
-                .unwrap(),
+            c.store.as_ref().unwrap().count_input_sessions().unwrap(),
             0,
             "库里必须一条都没有"
         );
@@ -731,7 +722,12 @@ mod tests {
     /// 默认配置下开关是**开**的（C4 的配置半边在 coordinator 侧也成立）。
     #[test]
     fn default_config_is_enabled() {
-        let c = coord("default", Config::default().input.history.enabled, 3000, 500);
+        let c = coord(
+            "default",
+            Config::default().input.history.enabled,
+            3000,
+            500,
+        );
         assert!(c.input_history_enabled(), "默认必须开启");
         c.note_commit_action(&insert("默认就记"));
         c.terminate_input_history("test");
