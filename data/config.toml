@@ -19,10 +19,17 @@
 # 注意：本文件不写 version 键——version 是用户文件的迁移状态锚点。
 
 [schema]
-active = "wubi86"
-available = ["wubi86", "wubi86_pinyin"]
+active = "pinyin"
+available = ["pinyin"]
 # 主码表方案 ID（拼音反查码源），留空时按 available 顺序自动选第一个码表方案
-primary_codetable = ""
+#
+# ⚠️ 本仓出厂已**关闭五笔输入**（`available` 只留拼音），故这里**显式钉住** `wubi86`：
+# `resolve_primary_codetable`（wind-engine/src/manager.rs）的判据是「显式配置优先，
+# 没配才按 `available` 顺序找」，而 `available` 里已无任何码表方案 ⇒ 留空会直接返回空串
+# （该函数文档写着「都无返回空」，字段本身标为可空），拼音候选的编码提示随之静默失效。
+# 显式钉住只把五笔**当作只读的反查码源**，不影响能否切换/输入五笔——`available` 才是那个开关。
+# 若不想要这个编码提示，把本键清空即可（届时反查无码源，属预期降级，不是故障）。
+primary_codetable = "wubi86"
 # 主拼音方案 ID（临时拼音的目标方案，如双拼方案 id），留空 = 全拼 "pinyin"
 primary_pinyin = ""
 

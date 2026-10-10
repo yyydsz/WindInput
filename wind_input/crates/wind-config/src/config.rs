@@ -13247,8 +13247,18 @@ scripts = { latin = 42 }
         let data_dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../data"));
         let preset = Config::system_preset_value(Some(data_dir)).unwrap();
         let cfg: Config = preset.try_into().unwrap();
-        // config.toml 作为 L2 预置覆盖了空的 code default
-        assert_eq!(cfg.schema.active, "wubi86");
+        // config.toml 作为 L2 预置覆盖了空的 code default。
+        //
+        // ⚠️ 断言值**随出厂预置走**：本仓已关闭五笔输入，`[schema] active` 出厂值为
+        // `"pinyin"`（`available` 亦只留 `["pinyin"]`）。本用例的**意图**是「预置覆盖了
+        // 空的 code default」，不是钉死某个方案 id，故跟随预置值更新——判据强度不变。
+        assert_eq!(cfg.schema.active, "pinyin");
+        // 顺带把「预置确实非空」也钉住：`Config::default()` 的 `active` 为空串，
+        // 预置若也退化回空，上一条断言会随之变得没有意义。
+        assert!(
+            !cfg.schema.active.is_empty() && cfg.schema.active != Config::default().schema.active,
+            "L2 预置必须给出非空且区别于 code default 的 active"
+        );
     }
 
     #[test]
