@@ -516,10 +516,7 @@ mod tests {
 
         // 对照：空格仍然取用（闸只拦非取用键）
         let dbg = format!("{:?}", press(VK_SPACE));
-        assert!(
-            dbg.contains(secret),
-            "空格仍应取用高亮那条，实际动作 {dbg}"
-        );
+        assert!(dbg.contains(secret), "空格仍应取用高亮那条，实际动作 {dbg}");
         assert_eq!(
             c.debug_active_mode(),
             Some("input_history"),
