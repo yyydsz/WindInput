@@ -13605,6 +13605,66 @@ smart_method = "delete_replace"
         assert_eq!(cfg.top_commit_mode, TopCommitMode::DirectCommit);
     }
 
+    /// ★ 输入历史**默认开启**（用户选定：「全部上屏都记」+「默认开启、可配置关闭」）。
+    ///
+    /// 与 `input.url.history_enabled`（默认关）刻意相反：那里的历史是附加能力（网址模式
+    /// 本可以不记任何东西），这里的历史**就是功能本身**——默认关等于功能不存在，而用户
+    /// 装完不会先去翻配置找它。
+    #[test]
+    fn input_history_defaults_to_on() {
+        let c = InputConfig::default();
+        assert!(c.history.enabled, "输入历史必须默认开启");
+        assert_eq!(c.history.max_sessions, 500);
+        assert_eq!(c.history.idle_break_ms, 3000);
+
+        // 缺 [input.history] 段（老用户手写的 config.toml 里没有它）也必须走默认值，
+        // 而不是 serde 的零值——这正是 `#[serde(default = "…")]` 的存在理由。
+        let cfg: InputConfig = toml::from_str("").unwrap();
+        assert!(
+            cfg.history.enabled,
+            "缺段时也必须默认开启，否则老用户升级后静默失效"
+        );
+        assert_eq!(cfg.history.max_sessions, 500);
+        assert_eq!(cfg.history.idle_break_ms, 3000);
+    }
+
+    /// 同源守门：L1（`InputHistoryConfig::default()`）与 L2（`data/config.toml`）必须同值。
+    /// 漂移的后果是单测跑在**现实中不存在的配置**下（全绿但保护是反的）。缺 `data/` 时静默跳过。
+    #[test]
+    fn input_history_l1_and_l2_agree() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../data")
+            .join("config.toml");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            eprintln!(
+                "跳过 input_history_l1_and_l2_agree：{} 不存在",
+                path.display()
+            );
+            return;
+        };
+        let v: toml::Value = toml::from_str(&text).expect("data/config.toml 应能解析");
+        let l1 = InputHistoryConfig::default();
+        let h = v
+            .get("input")
+            .and_then(|i| i.get("history"))
+            .unwrap_or_else(|| panic!("data/config.toml 应显式写出 [input.history]"));
+        assert_eq!(
+            h.get("enabled").and_then(toml::Value::as_bool),
+            Some(l1.enabled),
+            "input.history.enabled 的 L1 与 L2 漂移了"
+        );
+        assert_eq!(
+            h.get("max_sessions").and_then(toml::Value::as_integer),
+            Some(l1.max_sessions as i64),
+            "input.history.max_sessions 的 L1 与 L2 漂移了"
+        );
+        assert_eq!(
+            h.get("idle_break_ms").and_then(toml::Value::as_integer),
+            Some(l1.idle_break_ms as i64),
+            "input.history.idle_break_ms 的 L1 与 L2 漂移了"
+        );
+    }
+
     /// 双击候选窗截图：出厂关，空表反序列化与 Default 一致。
     #[test]
     fn candidate_double_click_screenshot_defaults_off() {
