@@ -2,9 +2,25 @@
 
 use crate::menu::{CandidateOp, MenuAnchor, MenuKind, ToolbarAction};
 
+/// 卡片面板 → 协调器的反向事件。
+///
+/// 渲染层的 `wind_ui::card_panel::CardPanelEvent` 定义在 wind-ui（本 crate 不能反向依赖它），
+/// 故协议层带一份等价载荷，由 `wind_ui::manager` 在面板事件出队时转换。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CardPanelUiEvent {
+    /// 单击第 i 张卡（0 起）
+    Click(usize),
+    /// 拖过多张卡：**有序、无重复**的下标（顺序即滑过先后）
+    MultiSelect(Vec<usize>),
+    /// 面板请求关闭（点击面板之外）
+    Close,
+}
+
 /// UI → 协调器的反向事件（鼠标交互）
 #[derive(Debug, Clone)]
 pub enum UiEvent {
+    /// 卡片面板：点击 / 拖选 / 关闭
+    CardPanel(CardPanelUiEvent),
     /// 点击选中当前页内第 N 个候选（0 起）
     CandidateSelect(usize),
     /// 滚轮翻页：>0 下一页，<0 上一页

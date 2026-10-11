@@ -329,6 +329,23 @@ impl UiManager {
             // 消息入队，本轮的 `wait` 会因此提前返回，故不必登记 `next_deadline`。
             if let Some(p) = &mut card_panel {
                 p.update();
+                // 事件出队 → 反向通道：**窗口只管像素，协调器管文本**（取哪几张、往宿主写什么）。
+                // 面板自身在 `Close` 时已就地隐藏，这里仍要把事件报上去——协调器据此清掉卡片
+                // 快照，否则面板已不在屏上、迟到的点击还会按旧下标上屏。
+                for ev in p.take_events() {
+                    let ev = match ev {
+                        crate::card_panel::CardPanelEvent::Click(i) => {
+                            wind_ui_types::CardPanelUiEvent::Click(i)
+                        }
+                        crate::card_panel::CardPanelEvent::MultiSelect(v) => {
+                            wind_ui_types::CardPanelUiEvent::MultiSelect(v)
+                        }
+                        crate::card_panel::CardPanelEvent::Close => {
+                            wind_ui_types::CardPanelUiEvent::Close
+                        }
+                    };
+                    let _ = event_tx.send(UiEvent::CardPanel(ev));
+                }
             }
 
             // 推进状态提示防抖（稳定后才真正显示气泡）

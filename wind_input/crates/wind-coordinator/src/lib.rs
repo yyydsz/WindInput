@@ -29,6 +29,7 @@ pub mod handle_addword;
 pub mod handle_assoc;
 pub mod handle_aux_code;
 pub mod handle_candidate;
+pub mod handle_card_panel;
 pub mod handle_charset;
 pub mod handle_cmdbar;
 #[cfg(ext_presenter)]

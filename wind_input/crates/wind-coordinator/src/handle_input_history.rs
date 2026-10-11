@@ -270,6 +270,17 @@ impl Coordinator {
     ) -> KeyAction {
         use wind_keys::keymap::{VK_BACK, VK_ESCAPE, VK_RIGHT};
 
+        // 触发键**再按一次**：收起卡片面板并退出本模式（卡片面板的开/关同一个键）。
+        // 判据见 `Coordinator::input_history_trigger_key_pressed`——用进入时记下的触发键字符，
+        // 不回查配置表；取用键（空格/回车/数字）不参与，故不会抢走下面那道取用闸。
+        if Self::input_history_trigger_key_pressed(state, data.key_code) {
+            self.hide_card_panel();
+            self.exit_special_mode(state);
+            // 同 `Esc` 臂：`exit_special_mode` 不复位候选窗可见性，隐藏是调用方的责任。
+            self.notify_ui_hide();
+            return KeyAction::ClearComposition;
+        }
+
         // 退出 / 退层：**`Esc` 与删除键同义**。
         //
         // ⚠️ 删除键原先落在下面的取用闸里被**静默吞掉**——既不退面板、也不透传，

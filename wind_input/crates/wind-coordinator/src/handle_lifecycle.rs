@@ -619,7 +619,12 @@ impl Coordinator {
                     return None;
                 }
                 debug!("key_action: entering input-history mode");
-                Some(self.enter_input_history_mode(state, key_code))
+                let act = self.enter_input_history_mode(state, key_code);
+                // 触发键同时弹出**卡片面板**（卡片 = 最近历史的分词，时间倒序）：
+                // 候选列表按「会话 → 分词」两层展开，面板把分词一次铺开、可直接拖选拼回。
+                // 取数/下发在 `handle_card_panel.rs`；面板为空时它自己发 `HideCardPanel`。
+                self.show_card_panel();
+                Some(act)
             }
             // 软键盘不是「模式」，没有编码缓冲也不进 ModeKind——直接开关面板即可。
             // 状态推送由按键路径顶层的 SoftKeyboardPushOnDrop 兜底。

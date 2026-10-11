@@ -1389,6 +1389,13 @@ pub struct Coordinator {
     /// ——`ReplaceBackward` 在那边是 `rewind`（它改变了文本流），在这边是排除（回改不是
     /// 新输入）。见 `input_history` 模块文档。
     pub(crate) input_history_buf: Mutex<crate::input_history::InputHistoryBuf>,
+    /// 卡片面板**当前展示**的卡片文本（下发 `ShowCardPanel` 时拍的快照）。
+    ///
+    /// 必须存：UI 回来的是**下标**（`CardPanelEvent::Click(i)`），下标只有映回这一份快照
+    /// 才是「用户点的那张」；改成收到点击再去读一遍历史，等于用读取时刻的列表去解释
+    /// 展示时刻的画面——面板存活期间用户又打了字就会点 A 上 B。
+    /// 收起/提交时清空，故「面板不在屏上却收到点击」不会上屏任何东西。
+    pub(crate) card_panel_cards: Mutex<Vec<String>>,
     /// 已封口、待落库的输入会话队列。
     ///
     /// ★ **按键路径上只做累积与 push**，写库与裁剪全在后台线程
@@ -2799,6 +2806,7 @@ impl Coordinator {
             draft_queue: Mutex::new(Vec::new()),
             draft_flushing: std::sync::atomic::AtomicBool::new(false),
             input_history_buf: Mutex::new(crate::input_history::InputHistoryBuf::default()),
+            card_panel_cards: Mutex::new(Vec::new()),
             input_history_queue: Mutex::new(Vec::new()),
             input_history_flushing: std::sync::atomic::AtomicBool::new(false),
             last_self_commit: Mutex::new(None),
@@ -7238,6 +7246,9 @@ impl Coordinator {
     pub(crate) fn handle_ui_event(&self, ev: UiEvent) {
         match ev {
             UiEvent::CandidateSelect(i) => self.mouse_select(i),
+            // 卡片面板：点击 / 拖选 → 上屏（出口 `push_no_key_ctx_action`）、关闭 → 收起。
+            // 见 `handle_card_panel.rs`（含「为何不能走 commit_then_new_composition」）。
+            UiEvent::CardPanel(ev) => self.handle_card_panel_event(ev),
             UiEvent::Page(dir) => self.mouse_page(dir),
             UiEvent::Hover(i) => self.mouse_hover(i),
             UiEvent::Toolbar(a) => self.mouse_toolbar(a),
