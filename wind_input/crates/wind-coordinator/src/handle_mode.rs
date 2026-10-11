@@ -784,6 +784,13 @@ impl Coordinator {
                 if !self.input_history_mode_available() {
                     return None;
                 }
+                // ★ 与 `enter_bound_action` 的同名臂逐条同源：面板还在屏上 ⇒ 收起，不再进。
+                // 这一条覆盖「有缓冲/有候选时顶字进入」那条通路，漏掉它就等于
+                // 「空码时能关、正打着字时关不掉」。详见那条臂的说明。
+                if self.input_history_panel_open() {
+                    debug!("input-history: 面板仍在屏上，触发键按收起处理（顶字进入臂）");
+                    return Some(self.close_input_history(state));
+                }
                 Some(self.commit_and_enter_input_history_mode(state, key_code))
             }
             // 软键盘不是模式，没有「顶字进入」的区别——但既然本函数的语义是「先把已转换

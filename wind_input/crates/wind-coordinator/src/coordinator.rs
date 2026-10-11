@@ -5536,8 +5536,25 @@ impl Coordinator {
             Some(ModeKind::Unicode) => self.exit_unicode_mode(state),
             Some(ModeKind::Special(_))
             | Some(ModeKind::RareChar)
-            | Some(ModeKind::Reverse)
-            | Some(ModeKind::InputHistory) => self.exit_special_mode(state),
+            | Some(ModeKind::Reverse) => self.exit_special_mode(state),
+            // ★ 输入历史比同族**多收一件**：卡片面板是另一个 `LayeredWindow`
+            //   （`wind-ui::card_panel_window`），下面那句 `notify_ui_hide` 收的是**候选窗**，
+            //   只有 `UiCommand::HideCardPanel` 收得掉它。少了这一句就是 `close_input_history`
+            //   文档里点名的那种残局：**模式退了、候选窗收了，面板却留在屏幕上**。
+            //
+            // ⚠️ 这一臂不是理论上的补漏，是用户实测「按 `\` 关不掉」的真凶：
+            // 面板留在屏上的同时 `active` 已归 None，此后触发键看到 `active == None`
+            // 便走**进入**通路把它重新弹一遍。真机日志的指纹正是「`卡片面板显示` 连着两条、
+            // 中间没有 `卡片面板隐藏`」（`%LOCALAPPDATA%\WindInput\logs\wind_input.*.log`）。
+            //
+            // 谁清掉了 `active`：本函数是所有「放弃会话」出口的单点，宿主 UIElement
+            // `Abort` 也落在它上面（`handle_uielement.rs` 的 `CMD_UIELEMENT_ACTION` 臂，
+            // host_reads 宿主进模式后必发，且**不按键、用户看不到任何原因**）。
+            // 修在这里 = 一次覆盖全部出口（宿主 Abort / 取消键 / 候选操作 / 失焦族）。
+            Some(ModeKind::InputHistory) => {
+                self.hide_card_panel();
+                self.exit_special_mode(state);
+            }
             Some(ModeKind::Mix(_)) => self.exit_mix_mode(state),
             // ★ 辅助码要**两步**：`exit_aux_code` 是本仓唯一一个「退出后主组合仍存活」的
             // 退出函数——它按设计还原拼音候选与 preedit（辅助码只是筛选，Esc 的语义是

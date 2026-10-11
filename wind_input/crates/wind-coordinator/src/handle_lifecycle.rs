@@ -618,6 +618,22 @@ impl Coordinator {
                 if !self.input_history_mode_available() {
                     return None;
                 }
+                // ★ 面板还在屏上 ⇒ 这一按的语义是**收起**，不是「再进一次」。
+                //
+                // 判据取「面板在不在」（`input_history_panel_open`）而不是 `state.active`：
+                // 面板挂在屏上而模式已被别的出口退掉是**可发生的**（宿主 UIElement `Abort`
+                // 走 `cancel_session`，见那里 InputHistory 臂的说明）。那种残局下本函数是
+                // 唯一的入口，照常 `enter_*` + `show_card_panel()` 的实机表现就是
+                // 「按了关不掉，面板又闪一下」——真机报障形态，日志指纹是
+                // `卡片面板显示` 连着两条、中间没有 `卡片面板隐藏`。
+                //
+                // 本臂与 `handle_mode.rs::commit_and_enter_bound_action` 的同名臂是
+                // **两条并列的进入通路**（空缓冲 / 有缓冲顶字进入），两处都要接，
+                // 只接一条就是「空码能关、打着字进的那次关不掉」。
+                if self.input_history_panel_open() {
+                    debug!("input-history: 面板仍在屏上，触发键按收起处理");
+                    return Some(self.close_input_history(state));
+                }
                 debug!("key_action: entering input-history mode");
                 let act = self.enter_input_history_mode(state, key_code);
                 // 触发键同时弹出**卡片面板**（卡片 = 最近历史的分词，时间倒序）：

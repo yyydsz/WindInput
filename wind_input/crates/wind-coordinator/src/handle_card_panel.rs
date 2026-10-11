@@ -85,6 +85,21 @@ impl Coordinator {
         let _ = self.ui_tx.send(UiCommand::HideCardPanel);
     }
 
+    /// 卡片面板此刻是否在屏上（协调器侧真相：`show_card_panel` 写入、`hide_card_panel` 清空）。
+    ///
+    /// ⚠️ 与 `state.active` **不是**同一件事，这正是本函数存在的理由：面板挂在屏上时模式
+    /// 可能已被别的出口退掉（宿主 UIElement `Abort` 走 `cancel_session`、切模式、失焦…）。
+    /// 用户按触发键时看的是**面板在不在**，故「同一个键开关」的判据必须问这个，不能只问
+    /// `active`——只问 `active` 的后果是「面板还在、触发键却走进入通路把它再弹一遍」，
+    /// 也就是真机报的「关不掉」。
+    pub(crate) fn input_history_panel_open(&self) -> bool {
+        !self
+            .card_panel_cards
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty()
+    }
+
     /// 「触发键又按了一次」判据：本次键与进入本模式时的触发键同字符。
     ///
     /// 用 `special_prefix`（进入时由 `keymap::vk_to_prefix_char_with_letters` 记下）而不是
@@ -216,10 +231,17 @@ impl Coordinator {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use wind_bridge::handler::{KeyEventData, MessageHandler};
     use wind_config::Config;
+    use wind_ipc::protocol::EVENT_KEY_DOWN;
     use wind_store::Store;
 
-    /// 造一个无头 Coordinator（临时库；卡片面板不需要配触发键——测试直接喂快照）。
+    /// `\`（`VK_OEM_5`）：本模块测试用的触发键。
+    const VK_BACKSLASH: u32 = 0xDC;
+
+    /// 造一个无头 Coordinator（临时库；反斜杠绑「输入历史」动词——与真机
+    /// `%APPDATA%\WindInput\config.toml` 的 `[keys.key_actions] backslash = "input_history"`
+    /// 同形，**单键走引导键链**，不进 key_down 热键表，见 `wind-config/src/hotkey.rs:117`）。
     fn coord(tag: &str) -> Arc<Coordinator> {
         let path = std::env::temp_dir().join(format!(
             "wind_cardpanel_{tag}_{}_{:?}.redb",
@@ -228,7 +250,37 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         let store = Arc::new(Store::open(&path).unwrap());
-        Coordinator::new_headless_with_store(Config::default(), None, store)
+        let mut cfg = Config::default();
+        cfg.keys
+            .key_actions
+            .insert("backslash".into(), "input_history".into());
+        Coordinator::new_headless_with_store(cfg, None, store)
+    }
+
+    /// 完整一次「按下触发键」：与真机同一条链路（`handle_key_event` 全程，不是直调收起函数）。
+    fn press(c: &Coordinator, vk: u32) {
+        c.handle_key_event(&KeyEventData {
+            key_code: vk,
+            scan_code: 0,
+            modifiers: 0,
+            event_type: EVENT_KEY_DOWN,
+            toggles: 0,
+            event_seq: 0,
+            prev_char: 0,
+        });
+    }
+
+    /// 往库里塞一段会话：`card_panel_cards()` 才非空，面板才有卡可显示。
+    fn seed_history(c: &Coordinator) {
+        let segments = vec![wind_store::input_history::InputSegmentRecord {
+            text: "测试片段".to_string(),
+            at_ms: 9000,
+        }];
+        c.store
+            .as_ref()
+            .unwrap()
+            .append_input_session(9000, 9001, "测试片段", &segments)
+            .unwrap();
     }
 
     fn seed_cards(c: &Coordinator, cards: &[&str]) {
@@ -294,5 +346,97 @@ mod tests {
         assert!(snapshot(&c).is_empty(), "关闭后不得残留卡片快照");
         c.handle_card_panel_event(CardPanelUiEvent::Click(0));
         assert!(snapshot(&c).is_empty(), "关闭后的点击不得再写库/上屏");
+    }
+
+    /// ★★ 真机缺陷守门 A：**放弃会话（宿主 UIElement `Abort` / 取消键）必须把卡片面板一并收掉**。
+    ///
+    /// 真机链路（有原文可查）：`host_reads` 宿主（记事本实测日志 `uielement: … host_reads=true`）
+    /// 进本模式后发 UIElement `Abort` → `handle_uielement.rs` 的 `CMD_UIELEMENT_ACTION` 臂
+    /// （`self.cancel_session(&mut state)`）→ `Coordinator::cancel_session`。
+    /// 修前该函数对 `InputHistory` 只调 `exit_special_mode`（`active` 归 None）并 `notify_ui_hide`
+    /// ——后者收的是**候选窗**，而卡片面板是另一个 `LayeredWindow`（`wind-ui::card_panel_window`）
+    /// ⇒ **模式退了、面板留在屏幕上**。
+    ///
+    /// 本用例先在修前代码上跑红（快照非空），修后绿——那一步就是「关不掉」的成因。
+    #[test]
+    fn cancel_session_also_hides_the_card_panel() {
+        let c = coord("cancelpanel");
+        seed_history(&c);
+        press(&c, VK_BACKSLASH);
+        assert!(
+            !snapshot(&c).is_empty(),
+            "前提：按下触发键后面板在屏上（`show_card_panel` 写了快照）"
+        );
+
+        let mut st = c.state.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = c.cancel_session(&mut st);
+        drop(st);
+
+        assert!(
+            c.debug_active_mode().is_none(),
+            "前提：放弃会话退出了模式（修前修后都成立）"
+        );
+        assert!(
+            snapshot(&c).is_empty(),
+            "★ 放弃会话后卡片面板不得留在屏上——留在屏上就是用户实测的「卡片面板关不掉」"
+        );
+    }
+
+    /// ★★ 真机缺陷守门 B：**同一个键开、同一个键关**——面板在屏上时按触发键必须**收起**它，
+    /// 而不是走「进入」通路把它重新弹一遍。
+    ///
+    /// 这一条钉的正是用户可见的形态「按 `\` 关不掉」。修前的完整序列（真机日志指纹：
+    /// `卡片面板显示` 连着两条、中间没有 `卡片面板隐藏`）：
+    /// ① 按 `\` → 进入模式 + 面板开；
+    /// ② 模式被 `cancel_session` 静默退掉（守门 A 的那个缺陷）⇒ `active == None`、**面板还在屏上**；
+    /// ③ 再按 `\` → 引导键链看到 `active == None` → `enter_bound_action` 的
+    ///    `BoundAction::InputHistory` 臂 → `enter_input_history_mode` + `show_card_panel()`
+    ///    ⇒ **面板被重开**，用户怎么按都关不掉。
+    ///
+    /// ⚠️ 本用例**只构造 ② 之后的残局**（`seed_cards` 写的就是 `show_card_panel` 留下的那份
+    /// 快照），因为守门 A 修好后 ② 已不可能自然出现；判据仍是「面板在不在屏上」，与用户
+    /// 看到的一致。修前跑红（快照被重新填满 + `active` 又变成 input_history），修后绿。
+    #[test]
+    fn trigger_key_closes_a_panel_whose_mode_was_silently_exited() {
+        let c = coord("stuckpanel");
+        seed_cards(&c, &["甲", "乙"]);
+        assert!(
+            c.debug_active_mode().is_none(),
+            "前提：模式已不在（面板是上一轮遗留的）"
+        );
+
+        press(&c, VK_BACKSLASH);
+
+        assert!(
+            snapshot(&c).is_empty(),
+            "★ 面板在屏上时按触发键必须收起它，不得重新进入模式再弹一次（「关了又开」）"
+        );
+        assert!(
+            c.debug_active_mode().is_none(),
+            "★ 收起后不得停在输入历史模式里"
+        );
+    }
+
+    /// ★★ 完整一次按键流程的收口断言（开 → 关 → 屏上不得再有面板）。
+    ///
+    /// 与 `handle_input_history::tests::trigger_key_again_closes_the_panel` 的差别：
+    /// 那条只断言 `debug_active_mode()`，**看不见面板**；本用例断言面板快照——「关了又开」
+    /// 的表现恰恰是快照被重新填上（`show_card_panel` 写入、`hide_card_panel` 清空），
+    /// 所以这条才抓得住它。
+    #[test]
+    fn full_trigger_sequence_never_leaves_a_panel() {
+        let c = coord("panelseq");
+        seed_history(&c);
+
+        press(&c, VK_BACKSLASH);
+        assert_eq!(c.debug_active_mode(), Some("input_history"), "第一次按：进模式");
+        assert!(!snapshot(&c).is_empty(), "第一次按：面板开");
+
+        press(&c, VK_BACKSLASH);
+        assert_eq!(c.debug_active_mode(), None, "第二次按：退模式");
+        assert!(
+            snapshot(&c).is_empty(),
+            "★ 第二次按：面板必须关掉且**没有被立刻重开**（重开会把快照写回来）"
+        );
     }
 }
