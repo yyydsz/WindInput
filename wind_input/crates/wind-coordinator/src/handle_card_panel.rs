@@ -115,7 +115,8 @@ impl Coordinator {
         let mut out: Vec<String> = Vec::new();
         // ① 内存里尚未落库的会话（最新在前）。
         for (_, s) in self.pending_input_history_sessions() {
-            for seg in &s.segments {
+            // ★ 会话内部的分词按时间**升序**存储，卡片要「刚打的最前」⇒ 必须反转。
+            for seg in s.segments.iter().rev() {
                 if !seg.text.is_empty() {
                     out.push(seg.text.clone());
                 }
@@ -134,7 +135,8 @@ impl Coordinator {
                 for (key, _rec) in rows {
                     match store.list_input_segments(&key) {
                         Ok(segs) => {
-                            for s in &segs {
+                            // ★ 同上：会话内分词升序存储，展示需倒序（刚打的最前）。
+                            for s in segs.iter().rev() {
                                 if !s.text.is_empty() {
                                     out.push(s.text.clone());
                                 }
