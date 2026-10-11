@@ -4,17 +4,23 @@
 //! 本模块只做三件事：
 //!
 //! 1. 持有一个 [`LayeredWindow`] 与它的 BGRA 缓冲；
-//! 2. 把面板画进缓冲（底板 + 每张卡一个填充矩形，选中卡换底色）；
+//! 2. 把面板画进缓冲（底板 + 每张卡一个填充矩形，选中卡换底色，再逐卡写该卡的词组文本）；
 //! 3. 把 Win32 鼠标消息翻译成 [`PanelPointer`] 喂给 [`CardPanel::on_pointer_at`]。
 //!
 //! # 可见选中态
 //!
 //! 选中必须**看得见**——用户看不见自己选了哪几张，等于没有选中态。绘制时按
 //! [`CardPanel::rects`] 逐张铺底，再按 [`CardPanel::selected`] 把选中卡换成
-//! [`CARD_BG_SELECTED`]（对未选中的 [`CARD_BG`]），这就是全部的选中反馈。
+//! [`CARD_BG_SELECTED`]（对未选中的 [`CARD_BG`]）**并换文字色**（[`CARD_FG_SELECTED`]
+//! 对 [`CARD_FG`]），底色与文字色两条一起给，选中态才在深/浅底上都读得出来。
 //!
-//! ⚠️ 卡片文本尚未绘制，见 [`CardPanelWindow::render`] 的 TODO：目前只画矩形。
-//! 「哪张被选中」已经肉眼可见，但卡片内容还看不出来。
+//! # 卡片文本怎么画
+//!
+//! 文本走 `TextRenderer::draw_text`（`text::dwrite`），与工具栏同一路数：本窗口没有
+//! `view::View` 树，缓冲就是一块裸 BGRA，故直接用「缓冲 + 尺寸 + 左上角 + 颜色」的签名，
+//! 而不是盒模型的 `paint`。文字**必须**留在卡内：`draw_text` 的排版宽度是整个缓冲宽度，
+//! 长词组会自己折行、横向溢出到隔壁卡，因此写之前先按卡内可用宽度截断并补省略号
+//! （[`fit_text`]），再加卡内边距做左侧起点、按测量高度做纵向居中。
 //!
 //! # `SetCapture` 是承重墙
 //!
@@ -28,14 +34,14 @@
 //! # 日志
 //!
 //! 卡片文本是用户输入，**只存在于像素缓冲里**：`info!` 只记卡片张数与窗口生命周期，
-//! 不记任何卡片内容（事件本身含下标，也不进 `info!`）。
+//! 不记任何卡片内容（事件本身含下标，也不进 `info!`）；文字绘制失败也只记「失败」这一件事。
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use tracing::{info, warn};
 
-use crate::card_panel::{CardItem, CardMetrics, CardPanel, CardPanelEvent, Rect};
+use crate::card_panel::{CardItem, CardMetrics, CardPanel, CardPanelEvent};
 #[cfg(windows)]
 use crate::card_panel::{PanelMouseKind, PanelPointer};
 #[cfg(windows)]
@@ -43,6 +49,7 @@ use crate::sys::{
     GetCursorPos, HWND, LPARAM, LRESULT, POINT, ReleaseCapture, SetCapture, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE, WPARAM, clamp_to_work_area,
 };
+use crate::text::dwrite::TextRenderer;
 use crate::window::LayeredWindow;
 // `crate::sys` 只转出窗口/输入那一族，进程运行毫秒数不在其中，故直接取。
 #[cfg(windows)]
@@ -66,6 +73,17 @@ const PANEL_BG: [u8; 4] = [0x1E, 0x1E, 0x1E, 0xF2];
 const CARD_BG: [u8; 4] = [0x3A, 0x3A, 0x3A, 0xFF];
 /// 选中卡底色（预乘 BGRA，不透明）——**唯一**的可见选中态。
 const CARD_BG_SELECTED: [u8; 4] = [0xD9, 0x77, 0x1F, 0xFF];
+/// 未选中卡的文字色（RGB + 不透明度）。
+const CARD_FG: [u8; 4] = [0xE6, 0xE6, 0xE6, 0xFF];
+/// 选中卡的文字色——底色是亮橙实底，文字必须反过来用深色，否则糊成一团。
+const CARD_FG_SELECTED: [u8; 4] = [0x1A, 0x0E, 0x04, 0xFF];
+
+/// 卡内文字字号（像素）。与面板底色一样，主题接线前先取固定值。
+const CARD_FONT_PX: f32 = 14.0;
+/// 字族：与软键盘同族，保证面板与键帽上的字一致。
+const CARD_FONT_FAMILY: &str = "Microsoft YaHei UI";
+/// 文字与卡片左右边的间距（像素）。左右各留一份，故卡内可用宽度要减两倍。
+const CARD_TEXT_PAD: i32 = 10;
 
 /// 把矩形 `(x, y, w, h)` 铺成纯色，越界部分裁掉。
 ///
@@ -102,6 +120,40 @@ fn fill_rect(
             buf[i..i + 4].copy_from_slice(&color);
         }
     }
+}
+
+/// 把 `text` 截到 `max_w` 像素内：放得下就原样返回，放不下则退到最后一个能放下的字符并补 `…`。
+///
+/// 这是「文字限制在卡内」的唯一手段。`TextRenderer::draw` 排版的可用宽度是**整个缓冲**
+/// （见 `dwrite.rs::draw` 里 `create_layout(…, buf_width, …)`），既不会按卡裁决，也没有
+/// 子矩形裁剪可用；长词组交给它就会折行、并横向压到隔壁卡上。故一律先截断再画。
+///
+/// 测量用闭包注入：真测量在非 Windows 是 mock 近似，截断的**边界**（正好放下 / 放不下
+/// 省略号）只能靠假测量在 host 上钉住。
+fn fit_text(text: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String {
+    if text.is_empty() || max_w <= 0.0 {
+        return String::new();
+    }
+    if measure(text) <= max_w {
+        return text.to_string();
+    }
+    // 超长一律带省略号，否则「刚好截断」与「本来就这么长」在屏幕上分不出来。
+    const ELLIPSIS: &str = "…";
+    let ell_w = measure(ELLIPSIS);
+    if ell_w > max_w {
+        return String::new();
+    }
+    let mut out = String::new();
+    for ch in text.chars() {
+        let mut probe = out.clone();
+        probe.push(ch);
+        if measure(&probe) + ell_w > max_w {
+            break;
+        }
+        out = probe;
+    }
+    out.push_str(ELLIPSIS);
+    out
 }
 
 /// 当前时刻（毫秒）。面板的长按/拖动判据都按毫秒比较，故直接用系统启动起的单调计数。
@@ -214,13 +266,17 @@ pub struct CardPanelWindow {
     pending: Rc<RefCell<Vec<CardPanelEvent>>>,
     /// 最近一批事件，供外部读（见 [`CardPanelWindow::last_events`]）。
     last_events: Vec<CardPanelEvent>,
+    /// 卡片文本渲染器。持有而非每帧新建：`TextRenderer` 内部带测量缓存与
+    /// DirectWrite 资源，逐帧重建会把缓存全丢掉（软键盘同理，见 `soft_keyboard.rs`）。
+    renderer: TextRenderer,
     visible: bool,
 }
 
 impl CardPanelWindow {
-    /// 建窗口 + 面板，并挂上鼠标处理器。窗口此刻仍是隐藏的。
+    /// 建窗口 + 面板 + 文本渲染器，并挂上鼠标处理器。窗口此刻仍是隐藏的。
     pub fn new() -> Result<Self, String> {
         let window = LayeredWindow::create(None, AVAIL_W, INITIAL_H, CLASS_NAME)?;
+        let renderer = TextRenderer::new(CARD_FONT_FAMILY, CARD_FONT_PX)?;
         let panel = Rc::new(RefCell::new(CardPanel::new(
             Vec::new(),
             AVAIL_W,
@@ -241,6 +297,7 @@ impl CardPanelWindow {
             panel,
             pending,
             last_events: Vec::new(),
+            renderer,
             visible: false,
         })
     }
@@ -319,30 +376,78 @@ impl CardPanelWindow {
         std::mem::take(&mut self.last_events)
     }
 
-    /// 把面板画进 BGRA 缓冲：底板 + 每张卡一个填充矩形（选中卡另一种底色）。
+    /// 把面板画进 BGRA 缓冲：底板 + 每张卡一个填充矩形（选中卡另一种底色）+ 卡内文字。
     ///
-    /// 整块重绘（清空 → 底板 → 卡片）：卡片数是个位数，重绘成本远小于一次上屏。
-    ///
-    /// TODO(文本): 卡片文本尚未绘制。文本要走 `text::dwrite::TextRenderer`（软键盘
-    /// 用的就是它），需要按它的测量/绘制签名接线（缓冲偏移、字号、每卡裁剪），
-    /// 本步只保证「哪张被选中」肉眼可见。
+    /// 整块重绘（清空 → 底板 → 卡片 → 文字）：卡片数是个位数，重绘成本远小于一次上屏。
+    /// **顺序不能换**：`draw_text` 的语义是「在已有底色之上再混一次」，文字先画就被
+    /// 紧接着的卡片底色整块盖掉。
     fn render(&mut self) {
-        let panel = self.panel.borrow();
-        let rects: Vec<(usize, Rect)> = panel.rects().iter().copied().enumerate().collect();
-        let selected: Vec<usize> = panel.selected().to_vec();
-        drop(panel);
+        // 先把要画的都取出来：`Rc<RefCell<_>>` 的借用不该跨到下面的 `buffer_mut()`。
+        let (rects, selected, texts) = {
+            let panel = self.panel.borrow();
+            (
+                panel.rects().to_vec(),
+                panel.selected().to_vec(),
+                panel
+                    .cards()
+                    .iter()
+                    .map(|c| c.text.clone())
+                    .collect::<Vec<String>>(),
+            )
+        };
 
         self.window.clear();
         let (bw, bh) = self.window.size();
-        let buf = self.window.buffer_mut();
-        fill_rect(buf, bw, bh, 0, 0, bw, bh, PANEL_BG);
-        for (i, r) in rects {
-            let color = if selected.contains(&i) {
-                CARD_BG_SELECTED
-            } else {
-                CARD_BG
+        {
+            let buf = self.window.buffer_mut();
+            fill_rect(buf, bw, bh, 0, 0, bw, bh, PANEL_BG);
+            for (i, r) in rects.iter().enumerate() {
+                let color = if selected.contains(&i) {
+                    CARD_BG_SELECTED
+                } else {
+                    CARD_BG
+                };
+                fill_rect(buf, bw, bh, r.x, r.y, r.w, r.h, color);
+            }
+        }
+
+        // 卡内可用宽度：左右各留一份边距。边距吃满（或卡退化）时索性不画字——
+        // 画出来必然压到隔壁卡上。
+        let mut draw_failed = false;
+        for (i, r) in rects.iter().enumerate() {
+            let Some(text) = texts.get(i).filter(|t| !t.is_empty()) else {
+                continue;
             };
-            fill_rect(buf, bw, bh, r.x, r.y, r.w, r.h, color);
+            let max_w = r.w as i32 - CARD_TEXT_PAD * 2;
+            if max_w <= 0 || r.h == 0 {
+                continue;
+            }
+            let max_w = max_w as f32;
+            let shown = fit_text(text, max_w, |s| self.renderer.measure_text(s).width);
+            if shown.is_empty() {
+                continue;
+            }
+            let m = self.renderer.measure_text(&shown);
+            let tx = (r.x + CARD_TEXT_PAD) as f32;
+            // 纵向居中；测量高度万一超过卡高（大字号主题），钳回卡片上沿，别往上一张卡里溢。
+            let ty = (r.y as f32 + (r.h as f32 - m.height) * 0.5).max(r.y as f32);
+            let fg = if selected.contains(&i) {
+                CARD_FG_SELECTED
+            } else {
+                CARD_FG
+            };
+            if self
+                .renderer
+                .draw_text(self.window.buffer_mut(), bw, bh, tx, ty, &shown, fg)
+                .is_err()
+            {
+                draw_failed = true;
+            }
+        }
+        if draw_failed {
+            // 卡在中间的失败原因（缺 surface / 缓冲过小）已在 `draw_text` 内部定级，
+            // 这里只记「这一帧有字没画上」；卡片文本是用户输入，不进日志。
+            warn!("卡片面板文字绘制失败");
         }
     }
 }
@@ -394,15 +499,63 @@ mod tests {
     }
 
     /// 分层窗口要求**预乘** alpha：任一分量超过 alpha 就会被 `UpdateLayeredWindow`
-    /// 画成发光/白边。顺带钉住「选中态与常态不是同一个颜色」。
+    /// 画成发光/白边。顺带钉住「选中态与常态不是同一个颜色」——底色与文字色各一条。
     #[test]
     fn colors_are_premultiplied_and_selection_is_distinct() {
-        for c in [PANEL_BG, CARD_BG, CARD_BG_SELECTED] {
+        for c in [
+            PANEL_BG,
+            CARD_BG,
+            CARD_BG_SELECTED,
+            CARD_FG,
+            CARD_FG_SELECTED,
+        ] {
             assert!(
                 c[0] <= c[3] && c[1] <= c[3] && c[2] <= c[3],
                 "颜色 {c:?} 未预乘"
             );
         }
         assert_ne!(CARD_BG, CARD_BG_SELECTED, "选中态必须与常态不同色");
+        assert_ne!(CARD_FG, CARD_FG_SELECTED, "选中卡文字色必须与常态不同");
+    }
+
+    /// 假测量：等宽 10px/字符。真测量在非 Windows 是 mock 近似，量不出截断边界。
+    fn mono(s: &str) -> f32 {
+        s.chars().count() as f32 * 10.0
+    }
+
+    /// 放得下就一个字不动。
+    #[test]
+    fn fit_text_keeps_text_that_fits() {
+        assert_eq!(fit_text("abc", 100.0, mono), "abc");
+        assert_eq!(fit_text("abc", 30.0, mono), "abc"); // 正好放下
+    }
+
+    /// 超长必须截断到卡内并带省略号（30px = 2 字 + 省略号）。
+    #[test]
+    fn fit_text_truncates_and_appends_ellipsis() {
+        assert_eq!(fit_text("abcdef", 30.0, mono), "ab…");
+        assert_eq!(fit_text("abcdef", 45.0, mono), "abc…");
+        assert_eq!(fit_text("词组词组词组", 30.0, mono), "词组…");
+    }
+
+    /// 退化输入：连省略号都放不下、空文本、卡宽为 0 —— 一律返回空串（不画字）。
+    #[test]
+    fn fit_text_degrades_to_empty() {
+        assert_eq!(fit_text("abcdef", 5.0, mono), "");
+        assert_eq!(fit_text("abc", 0.0, mono), "");
+        assert_eq!(fit_text("", 50.0, mono), "");
+    }
+
+    /// 截断结果必须**真的**落在可用宽度内——这是「文字留在卡内」的判据。
+    #[test]
+    fn fit_text_result_never_exceeds_budget() {
+        for w in [20.0f32, 25.0, 30.0, 33.0, 40.0, 60.0] {
+            let out = fit_text("一二三四五六七八九十", w, mono);
+            assert!(
+                mono(&out) <= w,
+                "宽度 {w} 下截断结果 {out:?} 有 {}px",
+                mono(&out)
+            );
+        }
     }
 }

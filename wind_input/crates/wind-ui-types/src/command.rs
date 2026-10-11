@@ -319,6 +319,19 @@ pub enum UiCommand {
     SoftKeyboardKeyState { slot: String, down: bool },
     /// 软键盘：切层（按住 Shift 显示第二层，松开还原）。
     SoftKeyboardLayer { shift: bool },
+    /// 卡片面板（输入历史等）：显示面板，或整块刷新它的卡片。
+    ///
+    /// 只给内容，不给坐标与尺寸：面板自己按卡片排版、贴光标定位（与候选窗同侧决策），
+    /// 尺寸是排版的**结果**，协调器无从预知。
+    ///
+    /// ⚠️ `cards` 里的文本是**用户输入**。渲染端只把它写进像素缓冲：`info!` 及以上
+    /// 不得记录，卡片张数可记。
+    ShowCardPanel {
+        /// 每张卡的词组文本，按**时间倒序**给（最新在前），顺序原样保持。
+        cards: Vec<String>,
+    },
+    /// 卡片面板：隐藏面板。
+    HideCardPanel,
     /// 关闭 UI
     Shutdown,
     /// 注入 host-render 管理器（Windows）；协调器 `set_host_render` 后下发，

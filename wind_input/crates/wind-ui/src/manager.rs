@@ -149,6 +149,9 @@ impl UiManager {
         let mut toast_hide_at: Option<std::time::Instant> = None;
         // 软键盘面板（惰性创建：首次 ShowSoftKeyboard 时构造，best-effort）
         let mut soft_keyboard: Option<crate::soft_keyboard::SoftKeyboard> = None;
+        // 卡片面板（惰性创建：首次 ShowCardPanel 时构造，best-effort）。与软键盘同形——
+        // 只在真要显示时才建窗，建失败只记错误、不影响其它窗口。
+        let mut card_panel: Option<crate::card_panel_window::CardPanelWindow> = None;
         // 最近一次主题。**惰性创建的窗口靠它补课**——`SetTheme` 一般只在启动时发一次，
         // 而软键盘可能在那之后很久才第一次打开，不缓存就会永远停在内置默认配色。
         let mut last_theme: Option<wind_theme::Resolved> = None;
@@ -320,6 +323,12 @@ impl UiManager {
             // 推进软键盘（点击派发 / 长按重复 / 悬停重绘）
             if let Some(k) = &mut soft_keyboard {
                 k.tick();
+            }
+            // 推进卡片面板：鼠标事件出队（`WM_*` 由 wnd_proc 喂进处理器的队列，须在这里
+            // 搬进窗口）→ 重绘 → `UpdateLayeredWindow`。面板自身没有计时器，事件一到就有
+            // 消息入队，本轮的 `wait` 会因此提前返回，故不必登记 `next_deadline`。
+            if let Some(p) = &mut card_panel {
+                p.update();
             }
 
             // 推进状态提示防抖（稳定后才真正显示气泡）
@@ -1133,6 +1142,30 @@ impl UiManager {
                             k.set_layer(shift);
                         }
                     }
+                    UiCommand::ShowCardPanel { cards } => {
+                        // 只记张数：卡片文本是用户输入，不进日志。
+                        debug!("UI: ShowCardPanel (cards={})", cards.len());
+                        if card_panel.is_none() {
+                            match crate::card_panel_window::CardPanelWindow::new() {
+                                Ok(w) => card_panel = Some(w),
+                                Err(e) => error!("卡片面板窗口创建失败: {e}"),
+                            }
+                        }
+                        if let Some(p) = &mut card_panel {
+                            p.show(
+                                cards
+                                    .into_iter()
+                                    .map(crate::card_panel::CardItem::new)
+                                    .collect(),
+                            );
+                        }
+                    }
+                    UiCommand::HideCardPanel => {
+                        debug!("UI: HideCardPanel");
+                        if let Some(p) = &mut card_panel {
+                            p.hide();
+                        }
+                    }
                     UiCommand::Shutdown => {
                         info!("UI: Shutdown");
                         // host-render 全部隐藏（Shutdown 必达）
@@ -1149,6 +1182,9 @@ impl UiManager {
                         }
                         if let Some(t) = &mut toolbar {
                             t.hide();
+                        }
+                        if let Some(p) = &mut card_panel {
+                            p.hide();
                         }
                         break 'main;
                     }
