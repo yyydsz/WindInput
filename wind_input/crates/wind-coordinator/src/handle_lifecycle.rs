@@ -949,6 +949,19 @@ impl Coordinator {
         if let Some(kind) = self.bound_action_mode_kind(&parsed)
             && state.active == Some(kind)
         {
+            // ★ 输入历史是**唯一**一个「同一个键开、同一个键关」的动作，故它再按一次必须
+            // 真的把卡片面板收起来，不能沿用下面的「安静吃掉」。
+            //
+            // ⚠️ 这一臂是**必经之路**，不是补保险：本分支排在 `handle_key_event` 的
+            // `state.active` 分派**之前**，而按键功能表（`keys.key_actions`，含
+            // `backslash = "input_history"` 这类单符号键）编译进的正是同一张 key_down
+            // 表 ⇒ 面板开着时再按触发键，那一下键**根本到不了**
+            // `handle_input_history_key` 开头那段收起逻辑（真机实测：「卡片面板关不掉」）。
+            // 收起语义与那边共用 `close_input_history`（清面板 + 退模式 + 收候选窗）。
+            if kind == ModeKind::InputHistory {
+                debug!("input-history: 触发键再按一次 → 收起卡片面板并退出模式");
+                return Some(self.close_input_history(&mut state));
+            }
             return Some(KeyAction::Consumed);
         }
         // ★ 门卫没过（目标模式不可加载 / 临拼目标方案不是码表 / 辅助码无候选可筛）时

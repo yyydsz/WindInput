@@ -85,6 +85,27 @@ impl Coordinator {
         self.input_history_enabled()
     }
 
+    /// 收起输入历史：**隐藏卡片面板 + 退出模式 + 隐藏候选窗**，三者缺一不可。
+    ///
+    /// 三条出口（触发键再按一次 / `Esc` / 删除键）必须共用本函数——少做一件就是用户实测的
+    /// 那个「关不掉」。两种漏法的实机形态：
+    /// - 只 `exit_special_mode` + `notify_ui_hide`：`notify_ui_hide` 收的是**候选窗**，而卡片
+    ///   面板是 `wind-ui::card_panel_window` 里**另一个** `LayeredWindow`，只有
+    ///   `UiCommand::HideCardPanel`（[`Coordinator::hide_card_panel`]）收得掉它 ⇒ 模式退掉了、
+    ///   面板却一直挂在屏幕上；
+    /// - 只 `hide_card_panel`：模式还留在 `state.active` 里，下一次按键仍被本模式吞掉。
+    ///
+    /// ⚠️ 热键/按键功能表那条进入路径（`key_code=0` 哨兵）下，本模式的按键根本到不了
+    /// `handle_input_history_key`——收起动作由 `dispatch_bound_action_hotkey` 的幂等臂调用
+    /// 本函数完成，两处共用同一份语义。
+    pub(crate) fn close_input_history(&self, state: &mut State) -> KeyAction {
+        self.hide_card_panel();
+        self.exit_special_mode(state);
+        // 同 `Esc` 臂：`exit_special_mode` 不复位候选窗可见性，隐藏是调用方的责任。
+        self.notify_ui_hide();
+        KeyAction::ClearComposition
+    }
+
     /// 这个键是否绑了「输入历史」动词（三层链：方案 `[key_actions]` → 全局 → `z_key_action`）。
     ///
     /// ⚠️ 当前**没有调用点**，故不保留同名函数：进入本模式走的是通用动词分派
@@ -273,12 +294,14 @@ impl Coordinator {
         // 触发键**再按一次**：收起卡片面板并退出本模式（卡片面板的开/关同一个键）。
         // 判据见 `Coordinator::input_history_trigger_key_pressed`——用进入时记下的触发键字符，
         // 不回查配置表；取用键（空格/回车/数字）不参与，故不会抢走下面那道取用闸。
+        //
+        // ⚠️ 本臂只对「带得出触发字符」的进入方式有效。热键/按键功能表那条路是以
+        // `key_code=0` 哨兵进来的（见 `dispatch_bound_action_hotkey`），`special_prefix`
+        // 是空串 ⇒ 本判据恒 false。那种进入方式下**这一下按键根本到不了这里**：热键分支
+        // 排在 `state.active` 分派之前，由 `dispatch_bound_action_hotkey` 的幂等臂直接
+        // 收起面板（两处必须同时成立，见该函数里的注释）。
         if Self::input_history_trigger_key_pressed(state, data.key_code) {
-            self.hide_card_panel();
-            self.exit_special_mode(state);
-            // 同 `Esc` 臂：`exit_special_mode` 不复位候选窗可见性，隐藏是调用方的责任。
-            self.notify_ui_hide();
-            return KeyAction::ClearComposition;
+            return self.close_input_history(state);
         }
 
         // 退出 / 退层：**`Esc` 与删除键同义**。
@@ -304,8 +327,12 @@ impl Coordinator {
                 // ⚠️ 教训：先前只用 `debug_active_mode() == None` 断言「退出成功」，
                 // 而**面板可见性根本没被覆盖**，故这个缺陷一路活到真机。见本文件测试模块
                 // 对「隐藏未被单测覆盖」的显式声明。
-                self.notify_ui_hide();
-                return KeyAction::ClearComposition;
+                // ★★ 卡片面板必须一并收起。`notify_ui_hide` 只收**候选窗**，而卡片面板是
+                // `wind-ui::card_panel_window` 里另一个 `LayeredWindow`（`WS_EX_NOACTIVATE`、
+                // 独立 `UpdateLayeredWindow`），它只认 `UiCommand::HideCardPanel`。
+                // 少了这一句：模式退出了、候选窗收掉了，**面板留在屏幕上关不掉**——真机实测
+                // 报的正是这个形态（`Esc` 与删除键都不关）。
+                return self.close_input_history(state);
             }
             // 分词层 → 会话层：清层级位并重建
             state.special_buffer.clear();
@@ -863,6 +890,38 @@ mod tests {
             c.debug_active_mode(),
             Some("input_history"),
             "分词层按删除键只退一层，不退出模式"
+        );
+    }
+
+    /// ★★ 真机缺陷的守门测试：**触发键再按一次必须收起卡片面板并退出模式**。
+    ///
+    /// 缺陷原状（用户实测「卡片面板关不掉」）：面板由触发键弹出后，再按同一个键**什么也不
+    /// 发生**。成因有两条，各自独立成立，故两处都修了（本用例只断言用户可见的结果——退出
+    /// 模式——不锁死是哪一条路径做成的）：
+    /// ① `dispatch_bound_action_hotkey` 排在 `state.active` 分派之前，它那条「已在目标模式
+    ///    就安静吃掉」的幂等判据把这一下键吞掉，`handle_input_history_key` 的收起臂收不到；
+    /// ② 以 `key_code=0` 哨兵进入时 `special_prefix` 是空串，
+    ///    `input_history_trigger_key_pressed` 恒 false。
+    ///
+    /// ⚠️ 与 `backspace_exits_like_escape` 同样的覆盖边界：本用例**看不见候选窗与卡片面板
+    /// 的可见性**（测试环境里没有窗口，`hide_card_panel` / `notify_ui_hide` 只有一个发不出去
+    /// 的通道）。被钉住的是「模式退出」这条状态机断言，面板窗口真的从屏上消失仍需真机验证。
+    #[test]
+    fn trigger_key_again_closes_the_panel() {
+        let c = coord("toggleclose", 3000);
+        seed(&c, 9000, "第一段", &["第一段"]);
+        key(&c, VK_BACKSLASH, false);
+        assert_eq!(
+            c.debug_active_mode(),
+            Some("input_history"),
+            "前提：触发键进入本模式"
+        );
+
+        key(&c, VK_BACKSLASH, false);
+        assert_eq!(
+            c.debug_active_mode(),
+            None,
+            "★ 触发键再按一次必须退出输入历史——否则卡片面板没有「同一个键关掉」的出口"
         );
     }
 

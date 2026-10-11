@@ -325,9 +325,20 @@ impl CardPanelWindow {
         info!(cards = count, "卡片面板显示");
     }
 
-    /// 隐藏面板：面板侧 `hide()` + 窗口隐藏。
+    /// 隐藏面板：强制放开鼠标捕获 + 面板侧 `hide()` + 窗口隐藏。
+    ///
+    /// `ReleaseCapture` 这一句不能省。捕获是 `WM_LBUTTONDOWN` 拿的、`WM_LBUTTONUP` 放的
+    /// （见 [`CardPanelMouse::on_message`]），而窗口一旦隐藏，那个 UP **永远不会再来**——
+    /// 捕获若还留在本线程手上，此后整个桌面的按下/抬起都投给一个**看不见的窗口**，用户看到的是
+    /// 「点哪都没反应」。故隐藏时无条件放一次，不看 `down` 标志（它此刻可能仍为 `true`：
+    /// 面板完全可能在用户按住左键期间被收掉，如按住拖选时又按了触发键）。
+    /// `ReleaseCapture` 作用于**调用线程**当前的捕获，而窗口只活在 UI 线程、本函数也在该线程调用。
     pub fn hide(&mut self) {
         let was_visible = self.visible;
+        #[cfg(windows)]
+        unsafe {
+            let _ = ReleaseCapture();
+        }
         self.panel.borrow_mut().hide();
         self.window.hide();
         self.visible = false;
