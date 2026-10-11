@@ -5534,9 +5534,9 @@ impl Coordinator {
             Some(ModeKind::Url) => self.exit_url_mode(state),
             Some(ModeKind::Email) => self.exit_email_mode(state),
             Some(ModeKind::Unicode) => self.exit_unicode_mode(state),
-            Some(ModeKind::Special(_))
-            | Some(ModeKind::RareChar)
-            | Some(ModeKind::Reverse) => self.exit_special_mode(state),
+            Some(ModeKind::Special(_)) | Some(ModeKind::RareChar) | Some(ModeKind::Reverse) => {
+                self.exit_special_mode(state)
+            }
             // ★ 输入历史比同族**多收一件**：卡片面板是另一个 `LayeredWindow`
             //   （`wind-ui::card_panel_window`），下面那句 `notify_ui_hide` 收的是**候选窗**，
             //   只有 `UiCommand::HideCardPanel` 收得掉它。少了这一句就是 `close_input_history`

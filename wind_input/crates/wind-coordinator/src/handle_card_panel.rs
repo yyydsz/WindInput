@@ -429,7 +429,11 @@ mod tests {
         seed_history(&c);
 
         press(&c, VK_BACKSLASH);
-        assert_eq!(c.debug_active_mode(), Some("input_history"), "第一次按：进模式");
+        assert_eq!(
+            c.debug_active_mode(),
+            Some("input_history"),
+            "第一次按：进模式"
+        );
         assert!(!snapshot(&c).is_empty(), "第一次按：面板开");
 
         press(&c, VK_BACKSLASH);
